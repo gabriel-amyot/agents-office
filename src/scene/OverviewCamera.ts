@@ -124,6 +124,22 @@ export class OverviewController {
     this.maxDistance = fit.distance * MAX_ZOOM_OUT;
   }
 
+  /**
+   * Follow a change to the floor or the aspect ratio without moving the
+   * camera (issue #113): widen the pan clamp and the zoom-out limit to the
+   * new bounds, pulling the current target and distance back inside them if
+   * they no longer fit. Unlike `frame`, this never recenters or re-zooms, so
+   * a room added or removed, or a resize, keeps the view where it was.
+   */
+  updateBounds(bounds: THREE.Box3, fovDeg: number, aspect: number): void {
+    const fit = frameForBounds(bounds, fovDeg, aspect);
+    this.bounds = bounds.clone();
+    this.maxDistance = fit.distance * MAX_ZOOM_OUT;
+    this.distance = THREE.MathUtils.clamp(this.distance, this.minDistance, this.maxDistance);
+    this.target.x = THREE.MathUtils.clamp(this.target.x, this.bounds.min.x, this.bounds.max.x);
+    this.target.z = THREE.MathUtils.clamp(this.target.z, this.bounds.min.z, this.bounds.max.z);
+  }
+
   zoom(wheelDelta: number): void {
     this.distance = THREE.MathUtils.clamp(
       this.distance * Math.exp(wheelDelta * WHEEL_ZOOM_RATE),

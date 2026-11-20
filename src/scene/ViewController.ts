@@ -145,7 +145,7 @@ export class ViewController {
     this.options.modeChanged?.(mode);
   }
 
-  /** Call after each poll: applies `#focus` once and drops a selection whose agent left. */
+  /** Call after each poll: applies `#focus` once, drops a selection whose agent left, and follows a room the agent poll added or removed (issue #113). */
   agentsChanged(agents: ManagedAgent[]): void {
     const ids = agents.map((agent) => agent.info.id);
     this.selection.keepOnly(ids);
@@ -154,6 +154,32 @@ export class ViewController {
       this.pendingFocus = null;
       this.selection.select(focus);
     }
+    this.refreshBounds();
+  }
+
+  /**
+   * Call after the world poll adds or removes a room (issue #113): a world
+   * plugin's rooms (for example mission war rooms) do not go through
+   * `agentsChanged`, so without this call the pan limits of an open
+   * overview or isometric view stay on the rooms that existed when the view
+   * was entered.
+   */
+  roomsChanged(): void {
+    this.refreshBounds();
+  }
+
+  /**
+   * Widen the pan clamp and the zoom-out limit of the view in front to the
+   * current rooms and canvas aspect, without moving the camera (issue
+   * #113). A no-op in first person, which has no pan limits. Called after a
+   * room is added or removed and on every window resize, so staying in the
+   * overview or the isometric view (not just entering it) keeps both
+   * current: a room added later is reachable, and a later resize to a
+   * narrower window recomputes the maximum zoom-out.
+   */
+  private refreshBounds(): void {
+    if (this.currentMode === 'overview') this.overview.updateBounds(overviewBounds(this.options.scene), this.options.camera.fov, this.aspect());
+    else if (this.currentMode === 'isometric') this.isometric.updateBounds(overviewBounds(this.options.scene), this.aspect());
   }
 
   update(elapsed: number, delta: number): void {
@@ -201,6 +227,9 @@ export class ViewController {
   private listen(): void {
     const { canvas, keys } = this.options;
     const document = canvas.ownerDocument;
+
+    // A resize changes the aspect ratio the zoom-out limit is framed for (issue #113).
+    keys.addEventListener('resize', () => this.refreshBounds());
 
     keys.addEventListener('keydown', (event: KeyboardEvent) => {
       if (isFormField(event.target)) return;

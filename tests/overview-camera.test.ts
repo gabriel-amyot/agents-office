@@ -108,6 +108,52 @@ test('focusing on a point moves the target there and comes closer', () => {
   assert.deepEqual(pose.lookAt.toArray(), [5, 0, -4]);
 });
 
+test('updateBounds widens the pan and zoom-out limits to a grown floor without moving the camera (issue #113)', () => {
+  const view = new OverviewController();
+  view.frame(ROOM, 60, 16 / 9);
+  view.target.set(5, 0, -4);
+  const distance = view.distance;
+  const target = view.target.clone();
+  const maxBefore = view.maxDistance;
+
+  const grown = new THREE.Box3(new THREE.Vector3(-15, 0, -13), new THREE.Vector3(45, 0, 30));
+  view.updateBounds(grown, 60, 16 / 9);
+
+  assert.deepEqual(view.target.toArray(), target.toArray(), 'the target does not jump to the new center');
+  assert.equal(view.distance, distance, 'the zoom does not change');
+  assert.ok(view.maxDistance > maxBefore, 'zooming out can now show the grown floor');
+
+  // The pan clamp now follows the grown floor, not the original room: a drag far enough
+  // in either screen direction must reach the grown floor's far side (45), not stop at
+  // the original room's edge (15), whichever screen direction that side faces.
+  view.target.set(0, 0, -4);
+  view.drag(1e7, 0, 800, 60);
+  const posX = view.target.x;
+  view.target.set(0, 0, -4);
+  view.drag(-1e7, 0, 800, 60);
+  const negX = view.target.x;
+  assert.ok(Math.max(posX, negX) > ROOM.max.x, `pan reaches the grown room (posX=${posX}, negX=${negX})`);
+});
+
+test('updateBounds recomputes the zoom-out limit for a new aspect ratio, a resize (issue #113)', () => {
+  const view = new OverviewController();
+  view.frame(ROOM, 60, 16 / 9);
+  const wide = view.maxDistance;
+  view.updateBounds(ROOM, 60, 9 / 16);
+  assert.notEqual(view.maxDistance, wide, 'a narrower window recomputes the zoom-out limit');
+});
+
+test('updateBounds pulls the current zoom and pan back inside new, tighter limits', () => {
+  const view = new OverviewController();
+  const grown = new THREE.Box3(new THREE.Vector3(-15, 0, -13), new THREE.Vector3(45, 0, 30));
+  view.frame(grown, 60, 16 / 9);
+  view.zoom(100000); // sit at the (wide) max zoom-out
+  view.target.set(40, 0, 25); // and panned into the far corner of the grown floor
+  view.updateBounds(ROOM, 60, 16 / 9); // the floor shrinks back
+  assert.ok(view.distance <= view.maxDistance + 1e-9, 'zoom is clamped into the new, smaller max');
+  assert.ok(view.target.x <= ROOM.max.x + 1e-9 && view.target.z <= ROOM.max.z + 1e-9, 'pan is clamped into the new, smaller room');
+});
+
 test('the camera tween eases from start to end over its duration', () => {
   assert.equal(easeInOutCubic(0), 0);
   assert.equal(easeInOutCubic(1), 1);

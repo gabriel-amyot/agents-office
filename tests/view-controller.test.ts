@@ -34,8 +34,8 @@ function setup(hash = '', figureShiftPx?: () => number) {
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 100);
   camera.position.set(-12, 5.5, 11);
   const canvas = document.createElement('canvas');
-  Object.defineProperty(canvas, 'clientWidth', { value: 1600 });
-  Object.defineProperty(canvas, 'clientHeight', { value: 900 });
+  Object.defineProperty(canvas, 'clientWidth', { value: 1600, configurable: true });
+  Object.defineProperty(canvas, 'clientHeight', { value: 900, configurable: true });
   document.body.appendChild(canvas);
   const manager = new AgentManager(scene, fixedLayout);
   const selection = new SelectionState();
@@ -48,7 +48,7 @@ function setup(hash = '', figureShiftPx?: () => number) {
     ...(figureShiftPx ? { figureShiftPx } : {}),
   });
   const press = (code: string) => dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { code, key: code }));
-  return { view, camera, canvas, manager, selection, wall, hint, press };
+  return { view, camera, canvas, scene, manager, selection, wall, hint, press };
 }
 
 test('first person stays the default and the camera does not move by itself', () => {
@@ -90,7 +90,13 @@ test('#focus selects the agent once it appears, and flies the camera to it', () 
   manager.addAgent({ id: 'agent-1', name: 'One', activity: 'idle' });
   view.agentsChanged(manager.getAgents());
   assert.equal(selection.selected, 'agent-1');
-  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+  const startPosition = camera.position.clone();
+  // One tick in: a tween eases, an instant jump would already sit at the end position (issue #113).
+  view.update(0, 1 / 60);
+  const afterOneTick = camera.position.distanceTo(startPosition);
+  for (let i = 1; i < 60; i++) view.update(i / 60, 1 / 60);
+  const totalFlight = camera.position.distanceTo(startPosition);
+  assert.ok(afterOneTick < totalFlight * 0.2, `the first tick covers only a small fraction of the flight (${afterOneTick} of ${totalFlight})`);
   const lookAt = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
   const toAgent = new THREE.Vector3(4, 0, -3).sub(camera.position).normalize();
   assert.ok(lookAt.dot(toAgent) > 0.99, 'the camera looks at the selected agent');
@@ -130,6 +136,56 @@ test('zoomDistance reports the overview camera distance and follows the wheel', 
   const canvas = canvases[canvases.length - 1];
   canvas.dispatchEvent(new dom.window.WheelEvent('wheel', { deltaY: -400, cancelable: true }));
   assert.ok(view.zoomDistance < before, `zoomed in (${view.zoomDistance} < ${before})`);
+});
+
+test('the overview keeps the pan limits current when a room appears without re-entering it (issue #113)', () => {
+  const { view, scene } = setup('#view=overview');
+  // A base floor, like the building's own: without it the only floor object below would be
+  // the new annex, which would shrink the bounds instead of growing them.
+  const base = new THREE.Mesh(new THREE.PlaneGeometry(30, 26));
+  base.rotation.x = -Math.PI / 2;
+  base.userData.floor = true;
+  scene.add(base);
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+  const overview = (view as unknown as { overview: { maxDistance: number; target: THREE.Vector3; pan(right: number, forward: number): void } }).overview;
+  const before = overview.maxDistance;
+
+  const annex = new THREE.Mesh(new THREE.PlaneGeometry(10, 10));
+  annex.rotation.x = -Math.PI / 2;
+  annex.position.set(60, 0, 0);
+  annex.userData.floor = true;
+  scene.add(annex);
+  view.agentsChanged([]);
+
+  assert.ok(overview.maxDistance > before, 'the zoom-out limit grows to fit the new room');
+  overview.target.set(0, 0, 0);
+  overview.pan(1e7, 0);
+  const posX = overview.target.x;
+  overview.target.set(0, 0, 0);
+  overview.pan(-1e7, 0);
+  const negX = overview.target.x;
+  assert.ok(Math.max(posX, negX) > 30, `the pan reaches the new room (posX=${posX}, negX=${negX})`);
+});
+
+test('the overview recomputes the zoom-out limit on a resize without re-entering it (issue #113)', () => {
+  const { view, canvas } = setup('#view=overview');
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+  const overview = (view as unknown as { overview: { maxDistance: number } }).overview;
+  const before = overview.maxDistance;
+  Object.defineProperty(canvas, 'clientWidth', { value: 300, configurable: true });
+  dom.window.dispatchEvent(new dom.window.Event('resize'));
+  assert.notEqual(overview.maxDistance, before, 'a narrower window recomputes the zoom-out limit');
+});
+
+test('a room change and a resize in first person do nothing (no pan-limit view is active)', () => {
+  const { view, scene, canvas } = setup();
+  const annex = new THREE.Mesh(new THREE.PlaneGeometry(10, 10));
+  annex.userData.floor = true;
+  scene.add(annex);
+  view.agentsChanged([]); // must not throw outside the overview or the isometric view
+  Object.defineProperty(canvas, 'clientWidth', { value: 300, configurable: true });
+  dom.window.dispatchEvent(new dom.window.Event('resize'));
+  assert.equal(view.mode, 'first-person');
 });
 
 function screenX(camera: THREE.PerspectiveCamera, point: THREE.Vector3): number {

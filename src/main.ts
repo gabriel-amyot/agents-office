@@ -147,6 +147,9 @@ async function pollWorld(): Promise<void> {
     const world = (await res.json()) as World;
     setWorld(world);
     for (const extension of activeExtensions(scene)) extension.worldChanged?.(world);
+    // A world plugin's rooms (mission war rooms) can grow the building; keep the open
+    // overview or isometric view's pan limits current without waiting for a re-entry (issue #113).
+    view.roomsChanged();
     labelDetail.sceneChanged();
     frameLoop.sceneChanged();
   } catch {

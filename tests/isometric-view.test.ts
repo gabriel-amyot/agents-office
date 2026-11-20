@@ -14,7 +14,7 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => new Proxy({}, {
 const { AgentManager } = await import('../src/agents/AgentManager.js');
 const { ViewController } = await import('../src/scene/ViewController.js');
 const { SelectionState, parseViewHash } = await import('../src/scene/Selection.js');
-const { IsometricController, isometricDirection, ISO_ELEVATION } = await import('../src/scene/IsometricCamera.js');
+const { IsometricController, IsometricTween, isometricDirection, ISO_ELEVATION } = await import('../src/scene/IsometricCamera.js');
 const { chooseViewMode, viewStatusText } = await import('../src/scene/ViewMemory.js');
 const { labelDetail, signVisible, roomLabelVisible, OVERVIEW_FULL_LABEL_ZOOM } = await import('../src/ui/LabelDetail.js');
 const { renderQuality } = await import('../src/scene/RenderScheduler.js');
@@ -83,6 +83,57 @@ test('the wheel zooms within limits and the zoom reads as an overview-like dista
   assert.ok(iso.halfHeight <= iso.maxHalfHeight + 1e-9);
 });
 
+test('updateBounds widens the pan and zoom-out limits to a grown building without moving the camera (issue #113)', () => {
+  const { iso } = framedCamera();
+  iso.target.set(10, 0, -8);
+  const halfHeight = iso.halfHeight;
+  const target = iso.target.clone();
+  const maxBefore = iso.maxHalfHeight;
+
+  const grown = new THREE.Box3(new THREE.Vector3(-60, 0, -20), new THREE.Vector3(60, 3, 20));
+  iso.updateBounds(grown, 16 / 9);
+
+  assert.deepEqual(iso.target.toArray(), target.toArray(), 'the target does not jump to the new center');
+  assert.equal(iso.halfHeight, halfHeight, 'the zoom does not change');
+  assert.ok(iso.maxHalfHeight > maxBefore, 'zooming out can now show the grown building');
+
+  // The pan clamp now follows the grown building, not the original one.
+  iso.pan(1e7, 0);
+  assert.ok(iso.target.x > BUILDING.max.x, `pan reaches the grown building at x=${iso.target.x}`);
+});
+
+test('updateBounds recomputes the zoom-out limit for a new aspect ratio, a resize (issue #113)', () => {
+  const { iso } = framedCamera(16 / 9);
+  const wide = iso.maxHalfHeight;
+  iso.updateBounds(BUILDING, 0.6);
+  assert.notEqual(iso.maxHalfHeight, wide, 'a narrower window recomputes the zoom-out limit');
+});
+
+test('updateBounds pulls the current zoom and pan back inside new, tighter limits', () => {
+  const grown = new THREE.Box3(new THREE.Vector3(-60, 0, -20), new THREE.Vector3(60, 3, 20));
+  const { iso } = framedCamera();
+  iso.frame(grown, 16 / 9);
+  iso.zoom(100000); // sit at the (wide) max zoom-out
+  iso.target.set(55, 0, 18); // and panned into the far corner of the grown building
+  iso.updateBounds(BUILDING, 16 / 9); // the building shrinks back
+  assert.ok(iso.halfHeight <= iso.maxHalfHeight + 1e-9, 'zoom is clamped into the new, smaller max');
+  assert.ok(iso.target.x <= BUILDING.max.x + 1e-9 && iso.target.z <= BUILDING.max.z + 1e-9, 'pan is clamped into the new, smaller building');
+});
+
+test('an IsometricTween eases from start to end over its duration, it does not jump (issue #113)', () => {
+  const from = { target: new THREE.Vector3(0, 0, 0), halfHeight: 20 };
+  const to = { target: new THREE.Vector3(10, 0, 0), halfHeight: 5 };
+  const tween = new IsometricTween(from, to, 0.6);
+  const early = tween.advance(0.1);
+  assert.ok(early.target.x > 0 && early.target.x < 5, `early target.x=${early.target.x}`);
+  assert.ok(early.halfHeight < 20 && early.halfHeight > 5, `early halfHeight=${early.halfHeight}`);
+  assert.equal(tween.done, false);
+  const end = tween.advance(1);
+  assert.equal(tween.done, true);
+  assert.deepEqual(end.target.toArray(), [10, 0, 0]);
+  assert.equal(end.halfHeight, 5);
+});
+
 test('the same zoom gives the same screen size as the overview at that distance', () => {
   const { iso, camera } = framedCamera();
   iso.zoom(-600);
@@ -137,8 +188,8 @@ function setup(hash = '', options: { figureShiftPx?: () => number; view?: 'first
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 100);
   camera.position.set(-12, 5.5, 11);
   const canvas = document.createElement('canvas');
-  Object.defineProperty(canvas, 'clientWidth', { value: 1600 });
-  Object.defineProperty(canvas, 'clientHeight', { value: 900 });
+  Object.defineProperty(canvas, 'clientWidth', { value: 1600, configurable: true });
+  Object.defineProperty(canvas, 'clientHeight', { value: 900, configurable: true });
   canvas.getBoundingClientRect = () => ({ left: 0, top: 0, right: 1600, bottom: 900, width: 1600, height: 900, x: 0, y: 0, toJSON: () => ({}) });
   document.body.appendChild(canvas);
   const manager = new AgentManager(scene, fixedLayout);
@@ -258,7 +309,10 @@ for (const shift of [0, 300]) {
     settle();
     const framed = view.zoomDistance;
     selection.select('a');
-    for (let i = 0; i < 60; i++) view.update(2 + i / 60, 1 / 60);
+    // One tick in: a tween eases, an instant jump would already sit at the end zoom (issue #113).
+    view.update(2, 1 / 60);
+    assert.ok(view.zoomDistance > framed * 0.9, `the first tick has barely moved (${view.zoomDistance} vs framed ${framed})`);
+    for (let i = 1; i < 60; i++) view.update(2 + i / 60, 1 / 60);
     const camera = view.activeCamera;
     camera.updateMatrixWorld();
     const at = new THREE.Vector3(4, 0, -3).project(camera);
@@ -268,6 +322,46 @@ for (const shift of [0, 300]) {
     assert.ok(view.zoomDistance < framed, 'the camera zooms in on the figure');
   });
 }
+
+test('the isometric view keeps the pan limits current when a room appears without re-entering it (issue #113)', () => {
+  const { view, scene, settle } = setup('#view=iso');
+  // A base floor, like the building's own: without it the only floor object below would be
+  // the new annex, which would shrink the bounds instead of growing them.
+  const base = new THREE.Mesh(new THREE.PlaneGeometry(30, 26));
+  base.rotation.x = -Math.PI / 2;
+  base.userData.floor = true;
+  scene.add(base);
+  settle();
+  const iso = (view as unknown as { isometric: InstanceType<typeof IsometricController> }).isometric;
+  const before = iso.maxHalfHeight;
+
+  const annex = new THREE.Mesh(new THREE.PlaneGeometry(10, 10));
+  annex.rotation.x = -Math.PI / 2;
+  annex.position.set(60, 0, 0);
+  annex.userData.floor = true;
+  scene.add(annex);
+  view.agentsChanged([]);
+  settle();
+
+  assert.ok(iso.maxHalfHeight > before, 'the zoom-out limit grows to fit the new room');
+  iso.target.set(0, 0, 0);
+  iso.pan(1e7, 0);
+  const posX = iso.target.x;
+  iso.target.set(0, 0, 0);
+  iso.pan(-1e7, 0);
+  const negX = iso.target.x;
+  assert.ok(Math.max(posX, negX) > 30, `the pan reaches the new room (posX=${posX}, negX=${negX})`);
+});
+
+test('the isometric view recomputes the zoom-out limit on a resize without re-entering it (issue #113)', () => {
+  const { view, canvas, settle } = setup('#view=iso');
+  settle();
+  const iso = (view as unknown as { isometric: InstanceType<typeof IsometricController> }).isometric;
+  const before = iso.maxHalfHeight;
+  Object.defineProperty(canvas, 'clientWidth', { value: 300, configurable: true });
+  dom.window.dispatchEvent(new dom.window.Event('resize'));
+  assert.notEqual(iso.maxHalfHeight, before, 'a narrower window recomputes the zoom-out limit');
+});
 
 // --- View memory and labels ---
 

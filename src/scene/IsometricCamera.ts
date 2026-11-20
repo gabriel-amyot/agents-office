@@ -30,6 +30,25 @@ function screenAxes(): { back: THREE.Vector3; right: THREE.Vector3; up: THREE.Ve
   return { back, right, up };
 }
 
+/** The visible half height that keeps every corner of `box` on screen, centered on `box`. */
+function framedHalfHeight(box: THREE.Box3, aspect: number): number {
+  const center = box.getCenter(new THREE.Vector3());
+  const { right, up } = screenAxes();
+  let halfWidth = 0;
+  let halfHeight = 0;
+  const offset = new THREE.Vector3();
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) {
+        offset.set(x, y, z).sub(center);
+        halfWidth = Math.max(halfWidth, Math.abs(offset.dot(right)));
+        halfHeight = Math.max(halfHeight, Math.abs(offset.dot(up)));
+      }
+    }
+  }
+  return Math.max(halfHeight, halfWidth / Math.max(aspect, 1e-6), MIN_HALF_HEIGHT) * FRAME_MARGIN;
+}
+
 /** What the isometric camera shows: a point on the floor and half the visible height (the zoom). */
 export interface IsometricState {
   target: THREE.Vector3;
@@ -53,25 +72,29 @@ export class IsometricController {
   frame(bounds: THREE.Box3, aspect: number): void {
     const box = bounds.clone();
     box.max.y = Math.max(box.max.y, box.min.y + MIN_FRAME_HEIGHT);
-    const center = box.getCenter(new THREE.Vector3());
-    const { right, up } = screenAxes();
-    let halfWidth = 0;
-    let halfHeight = 0;
-    const offset = new THREE.Vector3();
-    for (const x of [box.min.x, box.max.x]) {
-      for (const y of [box.min.y, box.max.y]) {
-        for (const z of [box.min.z, box.max.z]) {
-          offset.set(x, y, z).sub(center);
-          halfWidth = Math.max(halfWidth, Math.abs(offset.dot(right)));
-          halfHeight = Math.max(halfHeight, Math.abs(offset.dot(up)));
-        }
-      }
-    }
-    this.target.copy(center);
-    this.halfHeight = Math.max(halfHeight, halfWidth / Math.max(aspect, 1e-6), MIN_HALF_HEIGHT) * FRAME_MARGIN;
+    this.target.copy(box.getCenter(new THREE.Vector3()));
+    this.halfHeight = framedHalfHeight(box, aspect);
     this.maxHalfHeight = this.halfHeight * MAX_ZOOM_OUT;
     this.bounds = box.clone();
     this.reach = box.getBoundingSphere(new THREE.Sphere()).radius * 2 + 10;
+  }
+
+  /**
+   * Follow a change to the building or the aspect ratio without moving the
+   * camera (issue #113): widen the pan clamp and the zoom-out limit to the
+   * new bounds, pulling the current target and zoom back inside them if they
+   * no longer fit. Unlike `frame`, this never recenters or re-zooms, so a
+   * room added or removed, or a resize, keeps the view where it was.
+   */
+  updateBounds(bounds: THREE.Box3, aspect: number): void {
+    const box = bounds.clone();
+    box.max.y = Math.max(box.max.y, box.min.y + MIN_FRAME_HEIGHT);
+    this.maxHalfHeight = framedHalfHeight(box, aspect) * MAX_ZOOM_OUT;
+    this.bounds = box.clone();
+    this.reach = box.getBoundingSphere(new THREE.Sphere()).radius * 2 + 10;
+    this.halfHeight = THREE.MathUtils.clamp(this.halfHeight, this.minHalfHeight, this.maxHalfHeight);
+    this.target.x = THREE.MathUtils.clamp(this.target.x, this.bounds.min.x, this.bounds.max.x);
+    this.target.z = THREE.MathUtils.clamp(this.target.z, this.bounds.min.z, this.bounds.max.z);
   }
 
   zoom(wheelDelta: number): void {
