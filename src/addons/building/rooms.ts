@@ -49,10 +49,11 @@ export function roomFloorColor(kind: RoomKind): number {
 
 /**
  * The room name: lounges are numbered in the order they are rented, a workspace
- * desk room carries its workspace name.
+ * desk room carries its workspace name, spelled out as a grouping ("Desks · core
+ * workspace") rather than a bare tag, so it is clear why the room exists.
  */
 export function roomTitle(kind: RoomKind, earlierKinds: RoomKind[], tag?: string): string {
-  if (kind === 'desks' && tag) return `Desks · ${tag}`;
+  if (kind === 'desks' && tag) return `Desks · ${tag} workspace`;
   if (kind === 'lounge') return `Lounge ${earlierKinds.filter((earlier) => earlier === 'lounge').length + 1}`;
   // Only the first office is the user's; later ones are overflow waiting rooms
   if (kind === 'office' && earlierKinds.includes('office')) return `Waiting room ${earlierKinds.filter((earlier) => earlier === 'office').length + 1}`;

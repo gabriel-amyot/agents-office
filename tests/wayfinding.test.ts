@@ -303,7 +303,12 @@ test('lounges are numbered in the order they are rented', () => {
   assert.equal(roomTitle('lounge', []), 'Lounge 1');
   assert.equal(roomTitle('lounge', ['office', 'lounge', 'desks', 'lounge']), 'Lounge 3');
   assert.equal(roomTitle('library', ['lounge']), 'Library');
-  assert.equal(roomTitle('desks', [], 'core'), 'Desks · core');
+  assert.equal(roomTitle('desks', [], 'core'), 'Desks · core workspace');
+});
+
+test('a tagged desk room reads as a workspace grouping, not a bare tag (#130)', () => {
+  assert.equal(roomTitle('desks', [], 'proxy'), 'Desks · proxy workspace');
+  assert.equal(roomTitle('desks', []), 'Desks', 'no tag: the plain hall desks keep their plain title');
 });
 
 test('three lounges in the building are named Lounge 1, Lounge 2 and Lounge 3', () => {

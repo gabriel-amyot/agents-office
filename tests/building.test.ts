@@ -247,7 +247,7 @@ test('sessions of one workspace share a desk room named after it; others keep th
   assert.notEqual(a1.key.split('_')[0], b1.key.split('_')[0], 'another room for Beta');
   assert.match(loner.key, /^desk_/);
   const labels = scene.children.flatMap((c) => c.children).filter((c) => c.userData.roomLabel !== undefined).map((c) => c.userData.roomLabel);
-  assert.ok(labels.includes('Desks · Alpha') && labels.includes('Desks · Beta'));
+  assert.ok(labels.includes('Desks · Alpha workspace') && labels.includes('Desks · Beta workspace'));
   assert.deepEqual(JSON.parse(storage.get(BUILDING_STORAGE_KEY)!), ['office', 'library', 'desks@Alpha', 'desks@Beta']);
 });
 
