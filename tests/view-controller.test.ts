@@ -193,6 +193,116 @@ test('the overview recomputes the zoom-out limit on a resize without re-entering
   assert.notEqual(overview.maxDistance, before, 'a narrower window recomputes the zoom-out limit');
 });
 
+/** A floor the size of the building's own, so adding or removing an annex grows or shrinks the bounds instead of replacing them (the only floor object would otherwise be the annex itself). */
+function addBaseFloor(scene: THREE.Scene): void {
+  const base = new THREE.Mesh(new THREE.PlaneGeometry(30, 26));
+  base.rotation.x = -Math.PI / 2;
+  base.userData.floor = true;
+  scene.add(base);
+}
+
+function addAnnex(scene: THREE.Scene, x: number): THREE.Mesh {
+  const annex = new THREE.Mesh(new THREE.PlaneGeometry(10, 10));
+  annex.rotation.x = -Math.PI / 2;
+  annex.position.set(x, 0, 0);
+  annex.userData.floor = true;
+  scene.add(annex);
+  return annex;
+}
+
+test("the overview camera's far plane grows with the zoom-out limit, so it never clips the building (review fix 1)", () => {
+  const { view, scene, camera } = setup('#view=overview');
+  addBaseFloor(scene);
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+  const farBefore = camera.far;
+
+  addAnnex(scene, 600);
+  view.agentsChanged([]);
+
+  const overview = (view as unknown as { overview: { maxDistance: number } }).overview;
+  assert.ok(camera.far > farBefore, `the far plane grows past its old value (${camera.far} vs ${farBefore})`);
+  assert.ok(camera.far >= overview.maxDistance, `the far plane covers the new zoom-out limit (${camera.far} vs ${overview.maxDistance})`);
+});
+
+test('a bounds shrink eases the overview camera back inside the new limits, it does not snap (review fix 2)', () => {
+  const { view, scene, camera } = setup('#view=overview');
+  addBaseFloor(scene);
+  const annex = addAnnex(scene, 100);
+  view.agentsChanged([]);
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+
+  const overview = (view as unknown as { overview: { target: THREE.Vector3 } }).overview;
+  overview.target.set(95, 0, 0); // panned out near the annex
+  view.update(1, 1 / 60); // one frame with no flight applies this pose to the camera
+  const before = camera.position.clone();
+
+  scene.remove(annex); // the room disappears: the bounds shrink back under the camera
+  view.agentsChanged([]);
+  view.update(1 + 1 / 60, 1 / 60); // a single frame right after the shrink
+  const afterOneFrame = camera.position.distanceTo(before);
+
+  for (let i = 0; i < 60; i++) view.update(2 + i / 60, 1 / 60); // let any correction finish
+  const total = camera.position.distanceTo(before);
+  assert.ok(total > 1, `the shrink does move the camera (moved ${total})`);
+  assert.ok(afterOneFrame < total * 0.3, `one frame covers only a small fraction of the correction (${afterOneFrame} of ${total})`);
+});
+
+test("the isometric camera's near/far follow the zoom-out limit on every frame, so growth never clips the building (review fix 1)", () => {
+  const { view, scene } = setup('#view=iso');
+  addBaseFloor(scene);
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+  const camera = view.activeCamera as THREE.OrthographicCamera;
+  const farBefore = camera.far;
+
+  addAnnex(scene, 600);
+  view.agentsChanged([]);
+  view.update(1, 1 / 60); // applyIsometric runs every frame in the isometric mode
+
+  assert.ok(camera.far > farBefore, `the far plane grows past its old value (${camera.far} vs ${farBefore})`);
+});
+
+test('a bounds shrink eases the isometric camera back inside the new limits, it does not snap (review fix 2)', () => {
+  const { view, scene } = setup('#view=iso');
+  addBaseFloor(scene);
+  const annex = addAnnex(scene, 100);
+  view.agentsChanged([]);
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+
+  const iso = (view as unknown as { isometric: { target: THREE.Vector3 } }).isometric;
+  iso.target.set(95, 0, 0);
+  view.update(1, 1 / 60);
+  const camera = view.activeCamera;
+  const before = camera.position.clone();
+
+  scene.remove(annex);
+  view.agentsChanged([]);
+  view.update(1 + 1 / 60, 1 / 60);
+  const afterOneFrame = camera.position.distanceTo(before);
+
+  for (let i = 0; i < 60; i++) view.update(2 + i / 60, 1 / 60);
+  const total = camera.position.distanceTo(before);
+  assert.ok(total > 1, `the shrink does move the camera (moved ${total})`);
+  assert.ok(afterOneFrame < total * 0.3, `one frame covers only a small fraction of the correction (${afterOneFrame} of ${total})`);
+});
+
+test('a room removed mid-flight does not leave a selection flight off its target (review finding 3, attempted repro)', () => {
+  const { view, manager, selection, camera, scene } = setup('#view=overview');
+  addBaseFloor(scene);
+  manager.addAgent({ id: 'a', name: 'A', activity: 'idle' });
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+  const annex = addAnnex(scene, 100);
+  view.agentsChanged(manager.getAgents());
+
+  selection.select('a'); // starts the flight to the agent
+  view.update(0, 0.1); // partway through the 0.6 s flight
+  scene.remove(annex); // a room elsewhere disappears mid-flight, shrinking the bounds
+  view.agentsChanged(manager.getAgents());
+  for (let i = 0; i < 60; i++) view.update(1 + i / 60, 1 / 60); // finish the flight and settle
+
+  const target = new THREE.Vector3(4, 0, -3);
+  assert.ok(Math.abs(screenX(camera, target)) < 0.02, `the camera still settles on the agent (x=${screenX(camera, target)})`);
+});
+
 test('a room change and a resize in first person do nothing (no pan-limit view is active)', () => {
   const { view, scene, canvas } = setup();
   const annex = new THREE.Mesh(new THREE.PlaneGeometry(10, 10));

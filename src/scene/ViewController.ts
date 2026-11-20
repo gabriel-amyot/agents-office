@@ -176,10 +176,55 @@ export class ViewController {
    * overview or the isometric view (not just entering it) keeps both
    * current: a room added later is reachable, and a later resize to a
    * narrower window recomputes the maximum zoom-out.
+   *
+   * Two defects a review of this fix found and this method now also
+   * closes: a grown zoom-out limit did nothing to the perspective camera's
+   * far plane, which stayed sized for the bounds at entry and so clipped
+   * the building when zoomed out to the new limit; and a shrink that
+   * clamps the current target or distance applied on the very next frame
+   * with no easing, a camera jump of the same kind issue #113's own AC3
+   * asks a test to catch, just from a bounds change instead of a selection.
    */
   private refreshBounds(): void {
-    if (this.currentMode === 'overview') this.overview.updateBounds(overviewBounds(this.options.scene), this.options.camera.fov, this.aspect());
-    else if (this.currentMode === 'isometric') this.isometric.updateBounds(overviewBounds(this.options.scene), this.aspect());
+    const bounds = overviewBounds(this.options.scene);
+    if (this.currentMode === 'overview') {
+      const before = this.overview.pose();
+      this.overview.updateBounds(bounds, this.options.camera.fov, this.aspect());
+      this.updateFar(bounds);
+      this.easeOverviewToClampedPose(before);
+    } else if (this.currentMode === 'isometric') {
+      const before = this.isometric.state();
+      this.isometric.updateBounds(bounds, this.aspect());
+      this.easeIsometricToClampedState(before);
+    }
+  }
+
+  /** Grow the perspective camera's far plane with the zoom-out limit, so zooming out to it never clips the building. */
+  private updateFar(bounds: THREE.Box3): void {
+    const camera = this.options.camera;
+    const radius = bounds.getBoundingSphere(new THREE.Sphere()).radius;
+    const far = Math.max(100, this.overview.maxDistance + radius * 2);
+    if (far !== camera.far) {
+      camera.far = far;
+      camera.updateProjectionMatrix();
+    }
+  }
+
+  /** A bounds shrink can clamp the overview's target or distance: ease to the newly clamped pose rather than let the next frame snap there. A flight already in progress is left to finish on its own. */
+  private easeOverviewToClampedPose(before: CameraPose): void {
+    if (this.flight) return;
+    const after = this.overview.pose();
+    if (before.position.distanceToSquared(after.position) < 1e-9 && before.lookAt.distanceToSquared(after.lookAt) < 1e-9) return;
+    this.flyTo(before, after, true);
+  }
+
+  /** The isometric counterpart of `easeOverviewToClampedPose`. */
+  private easeIsometricToClampedState(before: IsometricState): void {
+    if (this.isometricFlight) return;
+    const after = this.isometric.state();
+    if (before.target.distanceToSquared(after.target) < 1e-9 && Math.abs(before.halfHeight - after.halfHeight) < 1e-9) return;
+    this.isometricFlight = new IsometricTween(before, after, FLIGHT_SECONDS);
+    this.isometric.setState(before);
   }
 
   update(elapsed: number, delta: number): void {
@@ -395,12 +440,7 @@ export class ViewController {
     const { camera, scene } = this.options;
     const bounds = overviewBounds(scene);
     this.overview.frame(bounds, camera.fov, camera.aspect);
-    const radius = bounds.getBoundingSphere(new THREE.Sphere()).radius;
-    const far = Math.max(100, this.overview.maxDistance + radius * 2);
-    if (far !== camera.far) {
-      camera.far = far;
-      camera.updateProjectionMatrix();
-    }
+    this.updateFar(bounds);
   }
 
   private panWithKeys(delta: number): void {
