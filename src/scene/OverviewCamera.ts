@@ -15,6 +15,16 @@ export interface CameraPose {
   lookAt: THREE.Vector3;
 }
 
+/**
+ * The distance a single wheel tick leaves, clamped to the zoom-out limit. Pure: it takes the
+ * starting distance and the limits as plain numbers, so a caller can apply a wheel tick to a
+ * camera flight's own endpoint, not only to the live controller (issue #140 review, round 3,
+ * fix 2: a wheel tick during a correction flight used to cancel the flight and jump).
+ */
+export function zoomedDistance(distance: number, wheelDelta: number, minDistance: number, maxDistance: number): number {
+  return THREE.MathUtils.clamp(distance * Math.exp(wheelDelta * WHEEL_ZOOM_RATE), minDistance, maxDistance);
+}
+
 export interface OverviewFrame {
   target: THREE.Vector3;
   distance: number;
@@ -141,11 +151,7 @@ export class OverviewController {
   }
 
   zoom(wheelDelta: number): void {
-    this.distance = THREE.MathUtils.clamp(
-      this.distance * Math.exp(wheelDelta * WHEEL_ZOOM_RATE),
-      this.minDistance,
-      this.maxDistance,
-    );
+    this.distance = zoomedDistance(this.distance, wheelDelta, this.minDistance, this.maxDistance);
   }
 
   /** Move the floor with the pointer: a drag in pixels at the current zoom. */

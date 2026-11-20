@@ -14,6 +14,8 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => new Proxy({}, {
 const { AgentManager } = await import('../src/agents/AgentManager.js');
 const { ViewController } = await import('../src/scene/ViewController.js');
 const { SelectionState } = await import('../src/scene/Selection.js');
+const { OFFICE } = await import('../src/utils/Constants.js');
+const OFFICE_HALF_X = OFFICE.halfX;
 after(() => {
   dom.window.close();
   Reflect.deleteProperty(globalThis, 'document');
@@ -301,6 +303,114 @@ test('a room removed mid-flight does not leave a selection flight off its target
 
   const target = new THREE.Vector3(4, 0, -3);
   assert.ok(Math.abs(screenX(camera, target)) < 0.02, `the camera still settles on the agent (x=${screenX(camera, target)})`);
+});
+
+test("a shrink while zoomed out near the old limit does not drop the far plane before the correction gets there (review round 3, fix 1)", () => {
+  const { view, scene, camera } = setup('#view=overview');
+  addBaseFloor(scene);
+  const farAnnex = addAnnex(scene, 400);
+  view.agentsChanged([]);
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+
+  const overview = (view as unknown as { overview: { distance: number; maxDistance: number } }).overview;
+  overview.distance = overview.maxDistance; // zoomed all the way out, at the old limit
+  view.update(1, 1 / 60); // no flight yet: this pose renders directly
+  const liveDistance = overview.distance; // what the camera, as actually rendered, needs the far plane to cover
+
+  scene.remove(farAnnex); // the bounds shrink back to the base floor alone
+  view.agentsChanged([]); // refreshBounds: this used to drop camera.far to the NEW (small) limit at once
+
+  assert.ok(
+    camera.far >= liveDistance - 1e-6,
+    `the far plane still covers where the camera actually sits, not yet where the correction is heading (far=${camera.far}, live distance=${liveDistance})`,
+  );
+});
+
+test('a wheel tick during a correction flight moves the camera about as much as a plain tick, not the whole remaining correction (review round 3, fix 2)', () => {
+  const { view, scene, camera, canvas } = setup('#view=overview');
+  addBaseFloor(scene);
+  const annex = addAnnex(scene, 100);
+  view.agentsChanged([]);
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+
+  const overview = (view as unknown as {
+    overview: { target: THREE.Vector3; distance: number; zoom(delta: number): void; pose(): { position: THREE.Vector3; lookAt: THREE.Vector3 } };
+  }).overview;
+  overview.target.set(95, 0, 0); // panned out near the annex
+  view.update(1, 1 / 60); // no flight yet: this pose renders directly
+  const liveDistance = overview.distance;
+
+  // Baseline: what one ordinary wheel tick moves the camera from this same live distance, with no flight running.
+  const poseBefore = overview.pose();
+  overview.zoom(-400);
+  const poseAfter = overview.pose();
+  const normalTick = poseBefore.position.distanceTo(poseAfter.position);
+  overview.distance = liveDistance; // undo the probe zoom; the real repro starts clean
+
+  scene.remove(annex); // the shrink starts a correction flight back toward the base floor
+  view.agentsChanged([]);
+  view.update(1 + 1 / 60, 1 / 60); // a little way into the correction
+  const beforeWheel = camera.position.clone();
+
+  canvas.dispatchEvent(new dom.window.WheelEvent('wheel', { deltaY: -400, cancelable: true }));
+  view.update(1 + 2 / 60, 1 / 60);
+  const jump = camera.position.distanceTo(beforeWheel);
+
+  assert.ok(jump < normalTick * 3, `one wheel tick during a correction moves about as much as a normal tick (moved ${jump}, a normal tick moves ${normalTick})`);
+});
+
+test('a second shrink mid-correction retargets the overview flight to the newest bounds, not the first (stale) ones (review round 3, fix 3)', () => {
+  const { view, scene } = setup('#view=overview');
+  addBaseFloor(scene);
+  const nearAnnex = addAnnex(scene, 100);
+  const farAnnex = addAnnex(scene, 200);
+  view.agentsChanged([]);
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+
+  const overview = (view as unknown as { overview: { target: THREE.Vector3 } }).overview;
+  overview.target.set(195, 0, 0); // panned out near the farthest annex
+  view.update(1, 1 / 60);
+
+  scene.remove(farAnnex); // first shrink: bounds narrow to the near annex, starts a correction
+  view.agentsChanged([]);
+  view.update(1 + 1 / 60, 1 / 60); // a little way into the first correction
+
+  scene.remove(nearAnnex); // second shrink, mid-flight: bounds narrow further, to the base floor alone
+  view.agentsChanged([]);
+
+  const flight = (view as unknown as { flight: { end: { lookAt: THREE.Vector3 } } | null }).flight;
+  assert.ok(flight, 'a correction is still in flight after the second shrink');
+  assert.ok(
+    Math.abs(flight!.end.lookAt.x) <= OFFICE_HALF_X + 1e-6,
+    `the flight's own endpoint already matches the newest bounds, not the first shrink's (x=${flight!.end.lookAt.x})`,
+  );
+});
+
+test('a second shrink mid-correction retargets the isometric flight to the newest bounds, not the first (stale) ones (review round 3, fix 3)', () => {
+  const { view, scene } = setup('#view=iso');
+  addBaseFloor(scene);
+  const nearAnnex = addAnnex(scene, 100);
+  const farAnnex = addAnnex(scene, 200);
+  view.agentsChanged([]);
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+
+  const iso = (view as unknown as { isometric: { target: THREE.Vector3 } }).isometric;
+  iso.target.set(195, 0, 0);
+  view.update(1, 1 / 60);
+
+  scene.remove(farAnnex);
+  view.agentsChanged([]);
+  view.update(1 + 1 / 60, 1 / 60);
+
+  scene.remove(nearAnnex);
+  view.agentsChanged([]);
+
+  const flight = (view as unknown as { isometricFlight: { end: { target: THREE.Vector3 } } | null }).isometricFlight;
+  assert.ok(flight, 'a correction is still in flight after the second shrink');
+  assert.ok(
+    Math.abs(flight!.end.target.x) <= OFFICE_HALF_X + 1e-6,
+    `the flight's own endpoint already matches the newest bounds, not the first shrink's (x=${flight!.end.target.x})`,
+  );
 });
 
 test('a room change and a resize in first person do nothing (no pan-limit view is active)', () => {

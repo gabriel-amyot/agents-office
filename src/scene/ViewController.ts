@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import type { ManagedAgent } from '../agents/AgentManager.js';
 import { focusPosition, freeCameraLook, setFreeCameraLook, setPointerLockFilter, updateFreeCamera } from './FreeCamera.js';
-import { IsometricController, IsometricTween, type IsometricState } from './IsometricCamera.js';
-import { OverviewController, PoseTween, floorUnder, overviewBounds, type CameraPose } from './OverviewCamera.js';
+import { IsometricController, IsometricTween, zoomedHalfHeight, type IsometricState } from './IsometricCamera.js';
+import { OverviewController, PoseTween, floorUnder, overviewBounds, overviewDirection, zoomedDistance, type CameraPose } from './OverviewCamera.js';
 import { SelectionMarker } from './SelectionMarker.js';
 import { isClick, isViewFromAbove, officeSelection, parseViewHash, pickAgent, type ScreenPoint, type SelectionState, type ViewMode } from './Selection.js';
 
@@ -56,8 +56,15 @@ export class ViewController {
   private overview = new OverviewController();
   private isometric = new IsometricController();
   private isometricCamera: THREE.OrthographicCamera;
-  private flight: { tween: PoseTween; end: CameraPose } | null = null;
-  private isometricFlight: IsometricTween | null = null;
+  /**
+   * `kind` tells a bounds correction (its endpoint is derived from the pan/zoom limits, so a
+   * later shrink or a wheel tick may retarget it in place) from everything else (a selection or
+   * a mode change, whose endpoint comes from elsewhere and a bounds change must never touch).
+   */
+  private flight: { tween: PoseTween; end: CameraPose; kind: 'correction' | 'other' } | null = null;
+  private isometricFlight: { tween: IsometricTween; end: IsometricState; kind: 'correction' | 'other' } | null = null;
+  /** The bounds `refreshBounds`/`frameOverview` last computed, so a live correction flight can keep its far plane current every frame without a fresh scene traversal (issue #140 review, round 3, fix 1). */
+  private lastOverviewBounds: THREE.Box3 | null = null;
   private savedFirstPerson: CameraPose | null = null;
   private beforeIsometric: ViewMode = 'overview';
   private hiddenInOverview: THREE.Object3D[] = [];
@@ -184,13 +191,27 @@ export class ViewController {
    * clamps the current target or distance applied on the very next frame
    * with no easing, a camera jump of the same kind issue #113's own AC3
    * asks a test to catch, just from a bounds change instead of a selection.
+   *
+   * A later review round (round 3) found three more gaps here, all about
+   * the same no-camera-jump question, now also closed: the far plane
+   * dropped to the new (smaller) limit the instant bounds shrank, before
+   * the easing correction had actually moved the camera there, so the
+   * correction itself could clip; the wheel cancelled a correction (the
+   * same way it cancelled a selection flight) and zoomed the live
+   * controller, which had already jumped to the clamped end state, so one
+   * tick jumped the whole remaining correction distance; and a second
+   * shrink mid-correction left the first correction's endpoint stale,
+   * since `easeOverviewToClampedPose`/`easeIsometricToClampedState` used
+   * to skip retargeting whenever a flight was already running, without
+   * telling a bounds correction apart from a selection or a mode change.
    */
   private refreshBounds(): void {
     const bounds = overviewBounds(this.options.scene);
     if (this.currentMode === 'overview') {
       const before = this.overview.pose();
       this.overview.updateBounds(bounds, this.options.camera.fov, this.aspect());
-      this.updateFar(bounds);
+      this.lastOverviewBounds = bounds;
+      this.updateFar(bounds, before.position.distanceTo(before.lookAt));
       this.easeOverviewToClampedPose(before);
     } else if (this.currentMode === 'isometric') {
       const before = this.isometric.state();
@@ -199,31 +220,54 @@ export class ViewController {
     }
   }
 
-  /** Grow the perspective camera's far plane with the zoom-out limit, so zooming out to it never clips the building. */
-  private updateFar(bounds: THREE.Box3): void {
+  /**
+   * Grow the perspective camera's far plane with the zoom-out limit, so zooming out to it
+   * never clips the building. Never shrinks it below `liveDistance` (round 3, fix 1): while a
+   * correction flight eases the camera toward a new, smaller limit, the far plane only
+   * shrinks as the camera actually gets there (`update()` calls this every frame of an
+   * overview flight with the live, interpolated distance), so the correction is never clipped
+   * mid-flight. It settles to the new limit on its own once the live distance reaches it.
+   */
+  private updateFar(bounds: THREE.Box3, liveDistance: number): void {
     const camera = this.options.camera;
     const radius = bounds.getBoundingSphere(new THREE.Sphere()).radius;
-    const far = Math.max(100, this.overview.maxDistance + radius * 2);
+    const far = Math.max(100, this.overview.maxDistance + radius * 2, liveDistance + radius * 2);
     if (far !== camera.far) {
       camera.far = far;
       camera.updateProjectionMatrix();
     }
   }
 
-  /** A bounds shrink can clamp the overview's target or distance: ease to the newly clamped pose rather than let the next frame snap there. A flight already in progress is left to finish on its own. */
+  /**
+   * A bounds shrink can clamp the overview's target or distance: ease to the newly clamped
+   * pose rather than let the next frame snap there. A selection or mode-change flight already
+   * in progress is left alone, its endpoint is not bounds-derived. A correction flight already
+   * in progress is retargeted in place instead (round 3, fix 3): a second shrink mid-correction
+   * now always aims at the latest bounds, never a first correction's stale endpoint.
+   */
   private easeOverviewToClampedPose(before: CameraPose): void {
-    if (this.flight) return;
     const after = this.overview.pose();
+    if (this.flight?.kind === 'correction') {
+      this.flight.end.position.copy(after.position);
+      this.flight.end.lookAt.copy(after.lookAt);
+      return;
+    }
+    if (this.flight) return;
     if (before.position.distanceToSquared(after.position) < 1e-9 && before.lookAt.distanceToSquared(after.lookAt) < 1e-9) return;
-    this.flyTo(before, after, true);
+    this.flyTo(before, after, true, 'correction');
   }
 
   /** The isometric counterpart of `easeOverviewToClampedPose`. */
   private easeIsometricToClampedState(before: IsometricState): void {
-    if (this.isometricFlight) return;
     const after = this.isometric.state();
+    if (this.isometricFlight?.kind === 'correction') {
+      this.isometricFlight.end.target.copy(after.target);
+      this.isometricFlight.end.halfHeight = after.halfHeight;
+      return;
+    }
+    if (this.isometricFlight) return;
     if (before.target.distanceToSquared(after.target) < 1e-9 && Math.abs(before.halfHeight - after.halfHeight) < 1e-9) return;
-    this.isometricFlight = new IsometricTween(before, after, FLIGHT_SECONDS);
+    this.isometricFlight = { tween: new IsometricTween(before, after, FLIGHT_SECONDS), end: after, kind: 'correction' };
     this.isometric.setState(before);
   }
 
@@ -231,14 +275,18 @@ export class ViewController {
     const camera = this.options.camera;
     if (this.currentMode === 'isometric') {
       if (this.isometricFlight) {
-        this.isometric.setState(this.isometricFlight.advance(delta));
-        if (this.isometricFlight.done) this.isometricFlight = null;
+        this.isometric.setState(this.isometricFlight.tween.advance(delta));
+        if (this.isometricFlight.tween.done) this.isometricFlight = null;
       } else {
         this.panWithKeys(delta);
       }
       this.applyIsometric();
     } else if (this.flight) {
       const pose = this.flight.tween.advance(delta);
+      // Keep the far plane covering the live (mid-ease), not the final, distance (round 3, fix 1).
+      if (this.currentMode === 'overview' && this.lastOverviewBounds) {
+        this.updateFar(this.lastOverviewBounds, pose.position.distanceTo(pose.lookAt));
+      }
       this.applyPose(pose);
       if (this.flight.tween.done) {
         if (this.currentMode === 'first-person') setFreeCameraLook(camera, this.flight.end.position, this.flight.end.lookAt);
@@ -319,11 +367,37 @@ export class ViewController {
     canvas.addEventListener('wheel', (event) => {
       if (!isViewFromAbove(this.currentMode)) return;
       event.preventDefault();
-      this.flight = null;
-      this.isometricFlight = null;
-      if (this.currentMode === 'isometric') this.isometric.zoom(event.deltaY);
-      else this.overview.zoom(event.deltaY);
+      if (this.currentMode === 'isometric') this.wheelIsometric(event.deltaY);
+      else this.wheelOverview(event.deltaY);
     }, { passive: false });
+  }
+
+  /**
+   * A wheel tick in the overview. With no flight running, zooms the live controller, same as
+   * before. A flight already in flight (a correction, a selection, a mode change) is left
+   * running: this retargets its own endpoint instead of cancelling it and jumping to the live
+   * controller's plain zoom, which used to move the camera by the whole remaining flight
+   * distance on a single tick (issue #140 review, round 3, fix 2). The endpoint's `lookAt`
+   * (its pan target) is not touched: a plain wheel tick never pans, in or out of a flight.
+   */
+  private wheelOverview(deltaY: number): void {
+    if (this.flight) {
+      const end = this.flight.end;
+      const distance = zoomedDistance(end.position.distanceTo(end.lookAt), deltaY, this.overview.minDistance, this.overview.maxDistance);
+      end.position.copy(end.lookAt).addScaledVector(overviewDirection(), distance);
+      return;
+    }
+    this.overview.zoom(deltaY);
+  }
+
+  /** The isometric counterpart of `wheelOverview`. */
+  private wheelIsometric(deltaY: number): void {
+    if (this.isometricFlight) {
+      const end = this.isometricFlight.end;
+      end.halfHeight = zoomedHalfHeight(end.halfHeight, deltaY, this.isometric.minHalfHeight, this.isometric.maxHalfHeight);
+      return;
+    }
+    this.isometric.zoom(deltaY);
   }
 
   private selectionChanged(agentId: string | null): void {
@@ -358,7 +432,8 @@ export class ViewController {
       const from: IsometricState = this.isometric.state();
       this.isometric.focusOn(point);
       this.isometric.pan(this.cardShiftPx() * this.isometric.unitsPerPixel(this.options.canvas.clientHeight), 0);
-      this.isometricFlight = new IsometricTween(from, this.isometric.state(), FLIGHT_SECONDS);
+      const to = this.isometric.state();
+      this.isometricFlight = { tween: new IsometricTween(from, to, FLIGHT_SECONDS), end: to, kind: 'other' };
       this.isometric.setState(from);
       return;
     }
@@ -399,9 +474,9 @@ export class ViewController {
     return (pixels * visibleHeight) / height;
   }
 
-  private flyTo(from: CameraPose, to: CameraPose, animate: boolean): void {
+  private flyTo(from: CameraPose, to: CameraPose, animate: boolean, kind: 'correction' | 'other' = 'other'): void {
     if (animate) {
-      this.flight = { tween: new PoseTween(from, to, FLIGHT_SECONDS), end: to };
+      this.flight = { tween: new PoseTween(from, to, FLIGHT_SECONDS), end: to, kind };
       return;
     }
     this.flight = null;
@@ -440,7 +515,8 @@ export class ViewController {
     const { camera, scene } = this.options;
     const bounds = overviewBounds(scene);
     this.overview.frame(bounds, camera.fov, camera.aspect);
-    this.updateFar(bounds);
+    this.lastOverviewBounds = bounds;
+    this.updateFar(bounds, this.overview.distance);
   }
 
   private panWithKeys(delta: number): void {

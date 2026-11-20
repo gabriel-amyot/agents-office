@@ -22,6 +22,16 @@ export function isometricDirection(): THREE.Vector3 {
   );
 }
 
+/**
+ * The half height a single wheel tick leaves, clamped to the zoom-out limit. Pure: it takes
+ * the starting half height and the limits as plain numbers, so a caller can apply a wheel tick
+ * to a camera flight's own endpoint, not only to the live controller (issue #140 review,
+ * round 3, fix 2).
+ */
+export function zoomedHalfHeight(halfHeight: number, wheelDelta: number, minHalfHeight: number, maxHalfHeight: number): number {
+  return THREE.MathUtils.clamp(halfHeight * Math.exp(wheelDelta * WHEEL_ZOOM_RATE), minHalfHeight, maxHalfHeight);
+}
+
 /** Screen right and screen up of the isometric view, in world space. */
 function screenAxes(): { back: THREE.Vector3; right: THREE.Vector3; up: THREE.Vector3 } {
   const back = isometricDirection();
@@ -98,7 +108,7 @@ export class IsometricController {
   }
 
   zoom(wheelDelta: number): void {
-    this.halfHeight = THREE.MathUtils.clamp(this.halfHeight * Math.exp(wheelDelta * WHEEL_ZOOM_RATE), this.minHalfHeight, this.maxHalfHeight);
+    this.halfHeight = zoomedHalfHeight(this.halfHeight, wheelDelta, this.minHalfHeight, this.maxHalfHeight);
   }
 
   /** Move the floor with the pointer: the floor point under it follows a drag in pixels. */
