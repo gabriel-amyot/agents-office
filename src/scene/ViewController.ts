@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import type { ManagedAgent } from '../agents/AgentManager.js';
 import { focusPosition, freeCameraLook, setFreeCameraLook, setPointerLockFilter, updateFreeCamera } from './FreeCamera.js';
-import { IsometricController, IsometricTween, zoomedHalfHeight, type IsometricState } from './IsometricCamera.js';
-import { OverviewController, PoseTween, floorUnder, overviewBounds, overviewDirection, zoomedDistance, type CameraPose } from './OverviewCamera.js';
+import { IsometricController, IsometricTween, zoomTowardCursor as zoomIsometricTowardCursor, type IsometricState } from './IsometricCamera.js';
+import { OverviewController, PoseTween, floorUnder, overviewBounds, overviewDirection, zoomTowardCursor as zoomOverviewTowardCursor, type CameraPose } from './OverviewCamera.js';
 import { SelectionMarker } from './SelectionMarker.js';
-import { isClick, isViewFromAbove, officeSelection, parseViewHash, pickAgent, type ScreenPoint, type SelectionState, type ViewMode } from './Selection.js';
+import { isClick, isViewFromAbove, officeSelection, parseViewHash, pickAgent, type PickTarget, type ScreenPoint, type SelectionState, type ViewMode } from './Selection.js';
 
 const FLIGHT_SECONDS = 0.6;
 const FIRST_PERSON_FOCUS_DISTANCE = 4;
@@ -26,6 +26,8 @@ export interface ViewControllerOptions {
   canvas: HTMLCanvasElement;
   scene: THREE.Scene;
   agents: () => ManagedAgent[];
+  /** Other pickable things besides an agent's figure (for example a tombstone). */
+  tombstones?: () => PickTarget[];
   /** Where key presses arrive (the window). */
   keys: Pick<Window, 'addEventListener'>;
   hint?: HTMLElement | null;
@@ -152,10 +154,16 @@ export class ViewController {
     this.options.modeChanged?.(mode);
   }
 
-  /** Call after each poll: applies `#focus` once, drops a selection whose agent left, and follows a room the agent poll added or removed (issue #113). */
+  /**
+   * Call after each poll: applies `#focus` once, drops a selection whose agent left, and
+   * follows a room the agent poll added or removed (issue #113).
+   * A tombstone is not an agent and never appears in `agents`, so its id is kept too: an open
+   * tombstone card must survive the routine 3 s agent poll, not just the next `worldChanged`.
+   */
   agentsChanged(agents: ManagedAgent[]): void {
     const ids = agents.map((agent) => agent.info.id);
-    this.selection.keepOnly(ids);
+    const tombstoneIds = (this.options.tombstones?.() ?? []).map((target) => target.id);
+    this.selection.keepOnly([...ids, ...tombstoneIds]);
     if (this.pendingFocus && ids.includes(this.pendingFocus)) {
       const focus = this.pendingFocus;
       this.pendingFocus = null;
@@ -303,7 +311,7 @@ export class ViewController {
     if (selected) this.marker.follow(selected.figure.group.position, elapsed);
   }
 
-  /** The agent whose figure is under a screen point, or null. */
+  /** The agent figure, or other pickable (a tombstone), under a screen point, or null. */
   pickAt(clientX: number, clientY: number): string | null {
     const rect = this.options.canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
@@ -314,7 +322,11 @@ export class ViewController {
     const camera = this.activeCamera;
     camera.updateMatrixWorld();
     this.raycaster.setFromCamera(ndc, camera);
-    return pickAgent(this.raycaster, this.options.agents().map((agent) => ({ id: agent.info.id, object: agent.figure.group })));
+    const targets = [
+      ...this.options.agents().map((agent) => ({ id: agent.info.id, object: agent.figure.group })),
+      ...(this.options.tombstones?.() ?? []),
+    ];
+    return pickAgent(this.raycaster, targets);
   }
 
   private listen(): void {
@@ -367,37 +379,73 @@ export class ViewController {
     canvas.addEventListener('wheel', (event) => {
       if (!isViewFromAbove(this.currentMode)) return;
       event.preventDefault();
-      if (this.currentMode === 'isometric') this.wheelIsometric(event.deltaY);
-      else this.wheelOverview(event.deltaY);
+      // Zoom toward the cursor (issue #87, AC1), not toward the room center: the point
+      // under the pointer stays under it. Falls back to a plain zoom while the canvas has
+      // no on-screen size yet (e.g. a test or a hidden tab), when NDC is undefined. A flight
+      // already running (a correction or a selection) is never cancelled here: `wheelOverview`
+      // / `wheelIsometric` retarget its own endpoint instead (issue #140 review, round 3, fix 2).
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        if (this.currentMode === 'isometric') this.wheelIsometric(event.deltaY);
+        else this.wheelOverview(event.deltaY);
+        return;
+      }
+      const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      if (this.currentMode === 'isometric') this.wheelIsometric(event.deltaY, ndcX, ndcY);
+      else this.wheelOverview(event.deltaY, ndcX, ndcY);
     }, { passive: false });
   }
 
   /**
-   * A wheel tick in the overview. With no flight running, zooms the live controller, same as
-   * before. A flight already in flight (a correction, a selection, a mode change) is left
-   * running: this retargets its own endpoint instead of cancelling it and jumping to the live
-   * controller's plain zoom, which used to move the camera by the whole remaining flight
-   * distance on a single tick (issue #140 review, round 3, fix 2). The endpoint's `lookAt`
-   * (its pan target) is not touched: a plain wheel tick never pans, in or out of a flight.
+   * A wheel tick in the overview. With no flight running, zooms the live controller toward the
+   * cursor (issue #87), or plainly when `ndcX`/`ndcY` are not given. A flight already running
+   * (a correction, a selection, a mode change) is left running: this retargets its own endpoint
+   * instead of cancelling it and jumping to the live controller's zoom, which used to move the
+   * camera by the whole remaining flight distance on a single tick (issue #140 review, round 3,
+   * fix 2). To retarget with the cursor math, which only operates on an `OverviewController`,
+   * it swaps the flight's endpoint into the live controller's own `target`/`distance` (which
+   * already carries the right pan bounds), zooms, reads the result back into the endpoint, then
+   * restores the controller's actual live values — never rendered, never observable outside
+   * this method.
    */
-  private wheelOverview(deltaY: number): void {
+  private wheelOverview(deltaY: number, ndcX?: number, ndcY?: number): void {
     if (this.flight) {
       const end = this.flight.end;
-      const distance = zoomedDistance(end.position.distanceTo(end.lookAt), deltaY, this.overview.minDistance, this.overview.maxDistance);
-      end.position.copy(end.lookAt).addScaledVector(overviewDirection(), distance);
+      const liveTarget = this.overview.target.clone();
+      const liveDistance = this.overview.distance;
+      this.overview.target.copy(end.lookAt);
+      this.overview.distance = end.position.distanceTo(end.lookAt);
+      if (ndcX !== undefined && ndcY !== undefined) zoomOverviewTowardCursor(this.overview, ndcX, ndcY, deltaY, this.options.camera.fov, this.aspect());
+      else this.overview.zoom(deltaY);
+      end.lookAt.copy(this.overview.target);
+      end.position.copy(this.overview.target).addScaledVector(overviewDirection(), this.overview.distance);
+      this.overview.target.copy(liveTarget);
+      this.overview.distance = liveDistance;
       return;
     }
-    this.overview.zoom(deltaY);
+    if (ndcX !== undefined && ndcY !== undefined) zoomOverviewTowardCursor(this.overview, ndcX, ndcY, deltaY, this.options.camera.fov, this.aspect());
+    else this.overview.zoom(deltaY);
   }
 
   /** The isometric counterpart of `wheelOverview`. */
-  private wheelIsometric(deltaY: number): void {
+  private wheelIsometric(deltaY: number, ndcX?: number, ndcY?: number): void {
     if (this.isometricFlight) {
       const end = this.isometricFlight.end;
-      end.halfHeight = zoomedHalfHeight(end.halfHeight, deltaY, this.isometric.minHalfHeight, this.isometric.maxHalfHeight);
+      const liveTarget = this.isometric.target.clone();
+      const liveHalfHeight = this.isometric.halfHeight;
+      this.isometric.target.copy(end.target);
+      this.isometric.halfHeight = end.halfHeight;
+      if (ndcX !== undefined && ndcY !== undefined) zoomIsometricTowardCursor(this.isometric, ndcX, ndcY, deltaY, this.aspect());
+      else this.isometric.zoom(deltaY);
+      end.target.copy(this.isometric.target);
+      end.halfHeight = this.isometric.halfHeight;
+      this.isometric.target.copy(liveTarget);
+      this.isometric.halfHeight = liveHalfHeight;
       return;
     }
-    this.isometric.zoom(deltaY);
+    if (ndcX !== undefined && ndcY !== undefined) zoomIsometricTowardCursor(this.isometric, ndcX, ndcY, deltaY, this.aspect());
+    else this.isometric.zoom(deltaY);
   }
 
   private selectionChanged(agentId: string | null): void {

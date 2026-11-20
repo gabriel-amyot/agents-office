@@ -16,6 +16,8 @@ const { ViewController } = await import('../src/scene/ViewController.js');
 const { SelectionState } = await import('../src/scene/Selection.js');
 const { OFFICE } = await import('../src/utils/Constants.js');
 const OFFICE_HALF_X = OFFICE.halfX;
+const { STATIC_SOURCE_LAYER } = await import('../src/scene/StaticMerge.js');
+const { OverviewController, zoomTowardCursor } = await import('../src/scene/OverviewCamera.js');
 after(() => {
   dom.window.close();
   Reflect.deleteProperty(globalThis, 'document');
@@ -82,6 +84,66 @@ test('#view=overview starts in the overview', () => {
   view.update(0, 1 / 60);
   assert.equal(view.mode, 'overview');
   assert.ok(camera.position.y > 15);
+});
+
+test('a click picks a tombstone, not just an agent figure (issue #127)', () => {
+  const document = dom.window.document;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 100);
+  camera.position.set(0, 1, 5);
+  const tombstone = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5));
+  mesh.layers.set(STATIC_SOURCE_LAYER);
+  tombstone.add(mesh);
+  tombstone.position.set(0, 1, 0);
+  scene.add(tombstone);
+  camera.lookAt(tombstone.position);
+  scene.updateMatrixWorld(true);
+  const canvas = document.createElement('canvas');
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1600, height: 900, right: 1600, bottom: 900, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+  const manager = new AgentManager(scene, fixedLayout);
+  const view = new ViewController({
+    camera, canvas, scene,
+    agents: () => manager.getAgents(),
+    tombstones: () => [{ id: 'tomb-1', object: tombstone }],
+    keys: dom.window,
+  });
+  assert.equal(view.pickAt(800, 450), 'tomb-1');
+});
+
+test('an open tombstone card survives a routine agent poll (issue #127)', () => {
+  const document = dom.window.document;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 100);
+  const canvas = document.createElement('canvas');
+  Object.defineProperty(canvas, 'clientWidth', { value: 1600 });
+  Object.defineProperty(canvas, 'clientHeight', { value: 900 });
+  document.body.appendChild(canvas);
+  const manager = new AgentManager(scene, fixedLayout);
+  const selection = new SelectionState();
+  const tombstone = new THREE.Object3D();
+  const view = new ViewController({
+    camera, canvas, scene, selection,
+    agents: () => manager.getAgents(),
+    tombstones: () => [{ id: 'tomb-1', object: tombstone }],
+    keys: dom.window,
+  });
+
+  selection.select('tomb-1');
+  // The 3 s agent poll calls this with no agents at all in an otherwise empty office;
+  // a tombstone never appears in `agents`, so it must not look like it "left".
+  view.agentsChanged(manager.getAgents());
+  assert.equal(selection.selected, 'tomb-1');
+
+  // A tombstone that genuinely goes away (the room's world update removed it) still deselects.
+  const otherView = new ViewController({
+    camera, canvas, scene, selection,
+    agents: () => manager.getAgents(),
+    tombstones: () => [],
+    keys: dom.window,
+  });
+  otherView.agentsChanged(manager.getAgents());
+  assert.equal(selection.selected, null);
 });
 
 test('#focus selects the agent once it appears, and flies the camera to it', () => {
@@ -357,6 +419,48 @@ test('a wheel tick during a correction flight moves the camera about as much as 
   const jump = camera.position.distanceTo(beforeWheel);
 
   assert.ok(jump < normalTick * 3, `one wheel tick during a correction moves about as much as a normal tick (moved ${jump}, a normal tick moves ${normalTick})`);
+});
+
+test('a cursor-anchored wheel tick during a correction flight also moves about as much as a plain cursor tick (issue #140 + issue #87 integration)', () => {
+  const { view, scene, camera, canvas } = setup('#view=overview');
+  // A real size, off-center, so the cursor math actually shifts the target, not only the
+  // distance (issue #87): a centered cursor degenerates to a plain zoom.
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1600, height: 900, right: 1600, bottom: 900, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+  const clientX = 1600 * 0.7; // ndcX = 0.4
+  const clientY = 900 * 0.35; // ndcY = 0.3
+
+  addBaseFloor(scene);
+  const annex = addAnnex(scene, 100);
+  view.agentsChanged([]);
+  for (let i = 0; i < 60; i++) view.update(i / 60, 1 / 60);
+
+  const overview = (view as unknown as {
+    overview: { target: THREE.Vector3; distance: number; pose(): { position: THREE.Vector3; lookAt: THREE.Vector3 } };
+  }).overview;
+  overview.target.set(95, 0, 0); // panned out near the annex
+  view.update(1, 1 / 60); // no flight yet: this pose renders directly
+  const liveTarget = overview.target.clone();
+  const liveDistance = overview.distance;
+
+  // Baseline: what one ordinary cursor-anchored tick moves the camera from this same live
+  // pose, with no flight running (the exact math issue #87's zoomTowardCursor already proves).
+  const poseBefore = overview.pose();
+  zoomTowardCursor(overview as unknown as InstanceType<typeof OverviewController>, 0.4, 0.3, -400, camera.fov, canvas.clientWidth / canvas.clientHeight);
+  const poseAfter = overview.pose();
+  const normalTick = poseBefore.position.distanceTo(poseAfter.position);
+  overview.target.copy(liveTarget); // undo the probe tick; the real repro starts clean
+  overview.distance = liveDistance;
+
+  scene.remove(annex); // the shrink starts a correction flight back toward the base floor
+  view.agentsChanged([]);
+  view.update(1 + 1 / 60, 1 / 60); // a little way into the correction
+  const beforeWheel = camera.position.clone();
+
+  canvas.dispatchEvent(new dom.window.WheelEvent('wheel', { deltaY: -400, clientX, clientY, cancelable: true }));
+  view.update(1 + 2 / 60, 1 / 60);
+  const jump = camera.position.distanceTo(beforeWheel);
+
+  assert.ok(jump < normalTick * 3, `one cursor-anchored wheel tick during a correction moves about as much as a normal cursor tick (moved ${jump}, a normal tick moves ${normalTick})`);
 });
 
 test('a second shrink mid-correction retargets the overview flight to the newest bounds, not the first (stale) ones (review round 3, fix 3)', () => {
