@@ -10,36 +10,30 @@ import { roomFurnishing, type RoomPlan } from './furnishing.js';
 
 export * from './roomLabels.js';
 
-export type RoomKind = 'office' | 'desks' | 'planning' | 'library' | 'lab' | 'review' | 'lounge';
+export type RoomKind = 'office' | 'desks' | 'library' | 'lab' | 'lounge';
 
 /** The station type each room kind adds. 'queue' spots are where agents wait for the user. */
 export const ROOM_STATION_TYPE: Record<RoomKind, string> = {
   office: 'queue',
   desks: 'implementing',
-  planning: 'planning',
   library: 'researching',
   lab: 'testing',
-  review: 'reviewing',
   lounge: 'idle',
 };
 
 export const ROOM_TITLE: Record<RoomKind, string> = {
   office: 'Your office',
   desks: 'Desks',
-  planning: 'Planning room',
   library: 'Library',
   lab: 'Test lab',
-  review: 'Writing room',
   lounge: 'Lounge',
 };
 
 const FLOOR_TINT: Record<RoomKind, number> = {
   office: 0x8a6f5a,
   desks: 0xcfc3a0,
-  planning: 0xb8c4d4,
   library: 0xa58a6a,
   lab: 0xb5cdb8,
-  review: 0xd4c4b0,
   lounge: 0x9a8ab0,
 };
 
@@ -47,12 +41,8 @@ export function roomFloorColor(kind: RoomKind): number {
   return FLOOR_TINT[kind];
 }
 
-/**
- * The room name: lounges are numbered in the order they are rented, a workspace
- * desk room carries its workspace name.
- */
-export function roomTitle(kind: RoomKind, earlierKinds: RoomKind[], tag?: string): string {
-  if (kind === 'desks' && tag) return `Desks · ${tag}`;
+/** The room name: lounges and waiting rooms are numbered in the order they are rented. */
+export function roomTitle(kind: RoomKind, earlierKinds: RoomKind[]): string {
   if (kind === 'lounge') return `Lounge ${earlierKinds.filter((earlier) => earlier === 'lounge').length + 1}`;
   // Only the first office is the user's; later ones are overflow waiting rooms
   if (kind === 'office' && earlierKinds.includes('office')) return `Waiting room ${earlierKinds.filter((earlier) => earlier === 'office').length + 1}`;

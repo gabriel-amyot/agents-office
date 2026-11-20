@@ -168,21 +168,6 @@ function furnishDesks(): RoomPlan {
   return { pieces, spots, signs: [] };
 }
 
-function furnishPlanning(): RoomPlan {
-  const pieces: Placement[] = [];
-  const spots: SpotPlan[] = [];
-  // The middle board stands off the far wall, clear of the gap an outer room's door may need
-  for (const { a, d } of [
-    { a: -3.6, d: ROOM_SIZE - 0.3 },
-    { a: 0, d: ROOM_SIZE - 1.5 },
-    { a: 3.6, d: ROOM_SIZE - 0.3 },
-  ]) {
-    pieces.push({ piece: PIECES.whiteboard(), a, d });
-    spots.push({ type: 'planning', a, d: d - 0.8, look: [a, d, 1.5] });
-  }
-  return { pieces, spots, signs: [] };
-}
-
 /** Shelves on the far wall and on both side walls: the knowledge base of the office. */
 function furnishLibrary(): RoomPlan {
   const pieces: Placement[] = [];
@@ -212,23 +197,11 @@ function furnishLab(): RoomPlan {
   return { pieces, spots, signs: [] };
 }
 
-function furnishReview(): RoomPlan {
-  const pieces: Placement[] = [];
-  const spots: SpotPlan[] = [];
-  for (const a of rows(4, 2.8)) {
-    pieces.push({ piece: PIECES.desk(), a, d: 7 });
-    spots.push({ type: 'reviewing', a, d: 6.3, look: [a, 7.15, 1.2] });
-  }
-  return { pieces, spots, signs: [] };
-}
-
 const FURNISH: Record<RoomKind, (shape: RoomShape) => RoomPlan> = {
   office: furnishOffice,
   desks: furnishDesks,
-  planning: furnishPlanning,
   library: furnishLibrary,
   lab: furnishLab,
-  review: furnishReview,
   lounge: furnishLounge,
 };
 
