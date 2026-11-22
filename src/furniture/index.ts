@@ -22,8 +22,8 @@ import { createWhiteboard } from './Whiteboard.js';
 
 /**
  * The furniture library: every piece a room can hold, in one place. Code builds
- * each piece (nothing is imported from a file); a room plan names pieces from here
- * and gives their positions (`src/addons/building/furnishing.ts`).
+ * each piece (nothing is imported from a file); a hall or hex room plan names
+ * pieces from here and gives their positions.
  *
  * `station`: a piece agents work at (desk, sofa, whiteboard). `furniture`: decor
  * that stands or hangs in a room. `plant`: a potted plant.

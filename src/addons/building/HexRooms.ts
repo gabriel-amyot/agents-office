@@ -256,6 +256,16 @@ export function buildHexOfficeDesk(layout: HexOfficeLayout): THREE.Group {
 
   const you = signElement('You');
   you.position.copy(frame.point(HEX_OFFICE_DESK.a, HEX_OFFICE_DESK.d + 0.7, 2.2));
+  // A detail sign (`LabelDetail.ts`): shows when zoomed in or hovered, so it does not cover the
+  // queue in the overview — the same treatment the rect office's own "You" sign got
+  // (`furnishing.ts`'s `furnishOffice`, now gone). `rect` is the office's own AABB, the same
+  // shape `hexRoomView`'s bounds already use.
+  const officeXs = layout.office.corners.map((corner) => corner.x);
+  const officeZs = layout.office.corners.map((corner) => corner.z);
+  you.userData.detailSign = {
+    rect: { minX: Math.min(...officeXs), maxX: Math.max(...officeXs), minZ: Math.min(...officeZs), maxZ: Math.max(...officeZs) },
+    hoverOnly: false,
+  };
   group.add(you);
 
   const queueCount = signElement('');
@@ -438,7 +448,11 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     roomView: (name: string) => {
       const query = name.trim().toLowerCase();
       if (query === 'hub') return hexRoomView(layout.hub);
-      if (query === 'hex-office') return hexRoomView(layout.office);
+      // Issue #260 steps 2+3: the rect office is gone, along with the `#room=office` path that
+      // used to frame it (`BuildingLayout.ts`'s own deleted rect lookup) — `office` keeps
+      // working as a `hex-office` alias so a bookmarked or documented `#room=office` link
+      // (`Selection.ts`'s own doc comment) still resolves, to the one office that is left.
+      if (query === 'hex-office' || query === 'office') return hexRoomView(layout.office);
       // Issue #258: `kind: 'library'` is load-bearing — `ViewController` already special-cases
       // it (walking in or double-clicking it swaps to the library's own scene, issue #239)
       // for whichever room carries it, rect or hex.

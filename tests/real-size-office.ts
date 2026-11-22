@@ -34,12 +34,14 @@ function seededRandom(seed: number): () => number {
  * and 40 agents. Half of the agents wear BMAD hats (one to four) and a quarter
  * wear GitHub cards (one to five), as with the fork plugins on.
  *
- * `buildingRooms` is documentation only, not read by this fixture (issue #260, step 7a): before
+ * `buildingRooms` is documentation only, not read by this fixture. Issue #260 (step 7a): before
  * the rented 'desks'/'lab'/'lounge' kinds retired, 40 agents' own overflow used to rent up to
- * 16 extra rect rooms; now that overflow absorbs into the hex Hub's own fixed desks and
- * kitchen/play corner instead, the rect building itself never grows past its one office room.
+ * 16 extra rect rooms; that overflow absorbs into the hex Hub's own fixed desks and
+ * kitchen/play corner instead. Issue #260 steps 2+3: the rect building's own office room
+ * (the last rect room `addRoom` ever built) is gone too, replaced by the hex Office —
+ * the rect building now never rents a room, full stop.
  */
-export const REAL_SIZE = { buildingRooms: 1, missionRooms: 9, agents: 40, hatWearers: 20, cardHolders: 10 } as const;
+export const REAL_SIZE = { buildingRooms: 0, missionRooms: 9, agents: 40, hatWearers: 20, cardHolders: 10 } as const;
 
 // 'librarian' included (issue #128 review): the budget fixture must wear every hat it pins.
 const PERSONAS = ['dev', 'architect', 'qa', 'pm', 'analyst', 'sm', 'debugger', 'spec-coach', 'data-engineer', 'ux-designer', 'tech-writer', 'librarian'];
@@ -123,18 +125,16 @@ function lastEquipSourceFor(i: number): 'skill' | 'tool' | undefined {
 export function buildRealSizeOffice(): { scene: THREE.Scene; manager: AgentManager; layout: BuildingLayout; github: GithubOfficeExtension } {
   const scene = new THREE.Scene();
   addLighting(scene);
-  // Per-workspace desk rooms are retired (#138): the 11 workspaces share the desk pool, the room count stays the same with plain `desks` rooms.
-  const rooms = ['office', 'library', 'lounge', 'lounge', 'lounge', ...Array.from({ length: 11 }, () => 'desks')];
-  const store = new Map([['agents-office.building.rooms', JSON.stringify(rooms)]]);
+  // Issue #260 steps 2+3: `addRoom`/`rememberedRooms` are gone — a seeded legacy room-kind
+  // list (the old 'office'/'library'/'lounge'x3/'desks'x11 rect rooms, #138) would just be
+  // swept by `dropLegacyRoomStorage` at construction now, so there is nothing left to seed.
   // Seeded for the room build only (the library's bookshelves): deterministic book
   // count and color, so the draw-call budget test measures the same scene every time.
   const realRandom = Math.random;
   Math.random = seededRandom(163);
   let layout: BuildingLayout;
   try {
-    layout = new BuildingLayout(scene, createOffice(scene), {
-      storage: { getItem: (key: string) => store.get(key) ?? null, setItem: () => undefined },
-    });
+    layout = new BuildingLayout(scene, createOffice(scene));
   } finally {
     Math.random = realRandom;
   }

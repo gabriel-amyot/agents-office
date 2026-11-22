@@ -286,7 +286,15 @@ test('the worst case measures the same total every run: the fixture\'s one rando
   // `true` cost 13 calls instead, the 3 shadow-casting ceiling lights each re-drawing every
   // merged mesh again — not worth it for geometry far from them). The "You" and queue-count
   // signs are CSS2D, free. Net measured: +4, landing at 381.
-  assert.deepEqual([...totals], [381], `expected every one of 8 runs to measure 381, got ${[...totals]}`);
+  // Issue #260 steps 2+3: the rect office — this fixture's own last rect room, `addRoom`'s own
+  // "office always first" guarantee — is gone, replaced outright by the hex Office this step
+  // already measured above. Its floor, 4 walls, door frame and furniture (desk, credenza,
+  // display shelf, floor lamp, 6 plants, 4 wall art pieces, sofa, 2 armchairs, the "You" and
+  // queue-count signs) never draw again. `real-size-office.ts`'s own seeded legacy room list
+  // (`['office', 'library', 'lounge' x3, 'desks' x11]`) is gone too — `dropLegacyRoomStorage`
+  // would have swept it at construction regardless, so the fixture stopped seeding it. Net
+  // measured: -23, landing at 358.
+  assert.deepEqual([...totals], [358], `expected every one of 8 runs to measure 358, got ${[...totals]}`);
 });
 
 test('the merge keeps every visible furniture triangle: merged vertices equal the source vertices', () => {

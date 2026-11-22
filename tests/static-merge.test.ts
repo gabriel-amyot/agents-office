@@ -141,33 +141,26 @@ test('a zone that casts no shadow merges into meshes that cast none; receive fla
   assert.equal(batch.mergedMeshes.filter((mesh) => mesh.receiveShadow).length, 1);
 });
 
-// Issue #260 (step 7a): 'lounge'/'desks' are retired rect kinds — the only room kind that still
-// grows past ring 0 is 'office' itself, once its own queue (~23 spots per room) fills past
-// several rooms' worth of waiting agents (the same overflow driver `wayfinding.test.ts`'s own
-// "outer rings" test now uses).
-test('the building still opens room walls by name after the merge, and the new room draws', () => {
+// Issue #260 steps 2+3: BuildingLayout no longer rents a new rect room past its own fixed
+// queue capacity (`addRoom` is gone; overflow grows a fresh station in place instead, no new
+// mesh). A pod subagent's own stool (`podKeys`, `zone: 'pods'`) is the one piece of geometry
+// BuildingLayout still adds to the scene after construction, so it is what still proves a
+// batch picks up this layout's own dynamic growth.
+test('a pod subagent\'s stool, added after construction, draws in the merged batch', () => {
   const scene = new THREE.Scene();
   const layout = new BuildingLayout(scene, createOffice(scene), {
     storage: { getItem: () => null, setItem: () => undefined },
   });
   const batch = new StaticBatch(scene);
   batch.update();
-
-  // Fill the first ring's worth of office queue capacity (roughly 7 rooms * 23 spots).
-  for (let i = 0; i < 160; i++) {
-    layout.seatFor({ id: `q${i}`, activity: 'meeting', extras: { attention: 'waiting', waitMinutes: i } }, null);
-  }
-  const roomCount = layout.roomKinds.length;
   const before = batch.mergedMeshes.reduce((sum, mesh) => sum + mesh.geometry.attributes.position.count, 0);
 
-  // More waiting agents than the current rooms' own queue capacity rents one more office room.
-  for (let i = 160; i < 200; i++) {
-    layout.seatFor({ id: `q${i}`, activity: 'meeting', extras: { attention: 'waiting', waitMinutes: i } }, null);
-  }
-  assert.ok(layout.roomKinds.length > roomCount, 'a new room was added');
+  layout.seatFor({ id: 'parent', activity: 'implementing' }, null);
+  layout.seatFor({ id: 'child', activity: 'researching', extras: { parentId: 'parent' } }, null);
+
   assert.equal(batch.update(), true);
   const afterCount = batch.mergedMeshes.reduce((sum, mesh) => sum + mesh.geometry.attributes.position.count, 0);
-  assert.ok(afterCount > before, 'the new room draws');
+  assert.ok(afterCount > before, 'the new stool draws');
   assert.equal(batch.update(), false);
 });
 
