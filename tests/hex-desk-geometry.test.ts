@@ -113,8 +113,11 @@ test('both monitor faces and every queued agent\'s own eye level sit inside the 
   for (const aspect of DESK_VIEW_ASPECTS) {
     const frustum = deskFrustum(aspect);
     for (const [side, quad] of (['left', 'right'] as const).map((s, i) => [s, hexMonitorWorldCorners(layout)[i]!] as const)) {
-      const box = new THREE.Box3().setFromPoints(quad);
-      assert.ok(frustum.intersectsBox(box), `the ${side} monitor is outside the frustum at aspect ${aspect.toFixed(3)}`);
+      // Review: `intersectsBox` is true the moment any part of the monitor overlaps the
+      // frustum — a monitor three-quarters cut off at the frame's own edge still "intersects".
+      // Every corner containsPoint is the real "fully in frame" check.
+      const outsideCorners = quad.filter((corner) => !frustum.containsPoint(corner));
+      assert.deepEqual(outsideCorners, [], `the ${side} monitor has ${outsideCorners.length} corner(s) outside the frustum at aspect ${aspect.toFixed(3)}`);
     }
     // Queue spots are floor-level (a figure's own root); the measured FOV guarantees the
     // visible part of each standing figure (eye height above its spot) clears the frustum.

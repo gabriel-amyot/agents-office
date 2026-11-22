@@ -197,8 +197,11 @@ test('both monitor faces sit inside the desk camera\'s own view frustum, at ever
   for (const aspect of DESK_VIEW_ASPECTS) {
     const frustum = deskFrustum(aspect);
     for (const [side, quad] of (['left', 'right'] as const).map((s, i) => [s, monitorWorldCorners()[i]!] as const)) {
-      const box = new THREE.Box3().setFromPoints(quad);
-      assert.ok(frustum.intersectsBox(box), `the ${side} monitor is outside the desk camera's own frustum at aspect ${aspect.toFixed(3)}`);
+      // Review: `intersectsBox` is true the moment any part of the monitor overlaps the
+      // frustum — a monitor three-quarters cut off at the frame's own edge still "intersects".
+      // Every corner containsPoint is the real "fully in frame" check.
+      const outsideCorners = quad.filter((corner) => !frustum.containsPoint(corner));
+      assert.deepEqual(outsideCorners, [], `the ${side} monitor has ${outsideCorners.length} corner(s) outside the desk camera's own frustum at aspect ${aspect.toFixed(3)}`);
     }
   }
 });

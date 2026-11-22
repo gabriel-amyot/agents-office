@@ -115,7 +115,11 @@ const MONITOR_A_OFFSETS = [-MONITOR_A_OFFSET, MONITOR_A_OFFSET] as const;
 export function hexMonitorPose(a: number, layout: HexOfficeLayout = buildHexOfficeLayout()): { position: THREE.Vector3; rotationY: number } {
   const frame = hexOfficeFrame(layout);
   const position = frame.point(HEX_OFFICE_DESK.a + a, HEX_OFFICE_DESK.d - MONITOR_D_OFFSET, MONITOR_Y);
-  const camera = hexDeskCameraPose(layout).position;
+  // `hexDeskCameraPoseRaw`, not `hexDeskCameraPose`: only the camera's own position matters
+  // here (fov does not), and `hexDeskCameraPose` spreads in `HEX_DESK_CAMERA_FOV` eagerly —
+  // reading it before its own module-load measurement finishes (`measureRequiredFov` calls
+  // `hexMonitorWorldCorners`, which calls this) throws a TDZ `ReferenceError`.
+  const camera = hexDeskCameraPoseRaw(layout).position;
   const rotationY = Math.atan2(camera.x - position.x, camera.z - position.z);
   return { position, rotationY };
 }
@@ -194,9 +198,16 @@ export function hexDeskTalkSpotPose(layout: HexOfficeLayout = buildHexOfficeLayo
  * The desk-view camera's own vertical FOV, re-derived by measurement (issue #260's own
  * parked plan: "not by reusing 82deg") rather than copied from the rect office. Grown from the
  * rect office's own 60 deg (`SceneSetup.ts` default) one degree at a time until every queue
- * spot clears the frustum at the tightest supported aspect ratio (1.6, `desk-monitors.test.ts`'s
- * own `DESK_VIEW_ASPECTS`), the same empirical method the rect `DESK_CAMERA_FOV`'s own comment
- * describes using originally.
+ * spot AND both full monitor faces clear the frustum at the tightest supported aspect ratio
+ * (1.6, `desk-monitors.test.ts`'s own `DESK_VIEW_ASPECTS`), the same empirical method the rect
+ * `DESK_CAMERA_FOV`'s own comment describes using originally.
+ *
+ * Review: the desk sits off to one side of the passage (`HEX_OFFICE_DESK.a < 0`), so the two
+ * monitors (`HEX_OFFICE_DESK.a` +/- `MONITOR_A_OFFSET`) are not symmetric around the lookAt's
+ * own centerline (`a = 0`) — the farther one needs more horizontal FOV than any queue spot
+ * does. Stopping as soon as the queue cleared the frame (the original check here) could still
+ * leave that monitor's own far edge outside it; this now requires every monitor corner inside
+ * the frustum too, not just `intersectsBox` (true for a monitor that is only partly in frame).
  */
 function measureRequiredFov(layout: HexOfficeLayout): number {
   const aspect = 1.6;
@@ -215,7 +226,9 @@ function measureRequiredFov(layout: HexOfficeLayout): number {
     // frame, so it checks eye height here (`spot.y + FIGURE_EYE_HEIGHT`) rather than the root
     // itself, which the camera's own downward tilt would otherwise clip at the near rows.
     const spots = hexQueueSpotWorldPositions(layout);
-    if (spots.every((spot) => frustum.containsPoint(spot.clone().setY(spot.y + FIGURE_EYE_HEIGHT)))) return fov;
+    const monitorCorners = hexMonitorWorldCorners(layout).flat();
+    if (spots.every((spot) => frustum.containsPoint(spot.clone().setY(spot.y + FIGURE_EYE_HEIGHT)))
+      && monitorCorners.every((corner) => frustum.containsPoint(corner))) return fov;
   }
   return 120;
 }
