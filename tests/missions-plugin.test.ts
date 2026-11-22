@@ -144,6 +144,18 @@ test('with no GitHub reference and no root given, a mission carries no repo tag'
   assert.ok(!('repo' in mission!));
 });
 
+// --- Issue #261 review round 3: a mission's own `component:` field, read but never written ---
+
+test('a mission.yaml component field passes through to the summary', () => {
+  const mission = summarizeMission('x', { title: 'Named wing', component: 'infra' });
+  assert.equal(mission?.component, 'infra');
+});
+
+test('a mission with no component field carries none (the repo guess is the client\'s own fallback)', () => {
+  const mission = summarizeMission('x', { title: 'No wing named' });
+  assert.ok(!('component' in mission!));
+});
+
 test('a done mission is a locked room, and folders that are not missions are skipped', () => {
   const missions = readMissions([root]);
   assert.equal(missions.find((m) => m.slug === 'old-mission')?.state, 'locked');

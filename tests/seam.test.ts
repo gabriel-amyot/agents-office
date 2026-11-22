@@ -331,6 +331,22 @@ test('a repo tag with a "." or ".." segment is dropped, never reaching the clien
   assert.equal('repo' in world.boards[0], false);
 });
 
+// --- Issue #261 review round 3: a room's own `component` field, whitelisted to the 4 real wings ---
+
+test('a room keeps a real component wing name, and drops anything not in the closed set', () => {
+  const world = projectWorld([
+    { rooms: [{ key: 'm-1', kind: 'mission', title: 'Named wing', state: 'open', component: 'infra', walls: {} }] },
+    { rooms: [{ key: 'm-2', kind: 'mission', title: 'Unknown wing', state: 'open', component: 'not-a-wing', walls: {} }] },
+    { rooms: [{ key: 'm-3', kind: 'mission', title: 'No wing set', state: 'open', walls: {} }] },
+    { rooms: [{ key: 'm-4', kind: 'mission', title: 'Script tag', state: 'open', component: '<script>alert(1)</script>', walls: {} }] },
+  ], ['missions'], publicId);
+
+  assert.equal(world.rooms[0].component, 'infra');
+  assert.equal('component' in world.rooms[1], false);
+  assert.equal('component' in world.rooms[2], false);
+  assert.equal('component' in world.rooms[3], false);
+});
+
 // --- Issue #191/#119: a floor library's own sections, whitelisted and capped ---
 
 test('a library section and entry are cleaned and capped, and a key is hashed, never sent raw', () => {

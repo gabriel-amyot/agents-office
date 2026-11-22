@@ -13,40 +13,40 @@ export type { WallRect };
 
 export * from './roomLabels.js';
 
-export type RoomKind = 'office' | 'desks' | 'library' | 'lab' | 'lounge';
+/**
+ * Issue #260 (step 7a): `desks`, `lab` and the numbered `lounge` are gone — the rented
+ * overflow-room system they lived in (`RoomPlanner.ts`'s `FIRST_RING`/`slotFor`) now serves
+ * only `office` (the user's own room, plus an overflow waiting room past 20 or so queued
+ * agents) and `library` (unreachable in practice: `BuildingLayout.ts`'s own hex Library, issue
+ * #258, already answers every `researching` claim before this would ever rent one). Overflow
+ * past the hall's own fixed desk/test-station/idle-corner capacity goes to the hex Hub's own
+ * spare desks and kitchen/play corner instead of renting a new room (`BuildingLayout.ts`'s
+ * `claimOfType`).
+ */
+export type RoomKind = 'office' | 'library';
 
 /** The station type each room kind adds. 'queue' spots are where agents wait for the user. */
 export const ROOM_STATION_TYPE: Record<RoomKind, string> = {
   office: 'queue',
-  desks: 'implementing',
   library: 'researching',
-  lab: 'testing',
-  lounge: 'idle',
 };
 
 export const ROOM_TITLE: Record<RoomKind, string> = {
   office: 'Your office',
-  desks: 'Desks',
   library: 'Library',
-  lab: 'Test lab',
-  lounge: 'Lounge',
 };
 
 const FLOOR_TINT: Record<RoomKind, number> = {
   office: 0x8a6f5a,
-  desks: 0xcfc3a0,
   library: 0xa58a6a,
-  lab: 0xb5cdb8,
-  lounge: 0x9a8ab0,
 };
 
 export function roomFloorColor(kind: RoomKind): number {
   return FLOOR_TINT[kind];
 }
 
-/** The room name: lounges and waiting rooms are numbered in the order they are rented. */
+/** The room name: a later office is a numbered overflow waiting room. */
 export function roomTitle(kind: RoomKind, earlierKinds: RoomKind[]): string {
-  if (kind === 'lounge') return `Lounge ${earlierKinds.filter((earlier) => earlier === 'lounge').length + 1}`;
   // Only the first office is the user's; later ones are overflow waiting rooms
   if (kind === 'office' && earlierKinds.includes('office')) return `Waiting room ${earlierKinds.filter((earlier) => earlier === 'office').length + 1}`;
   return ROOM_TITLE[kind];

@@ -47,6 +47,15 @@ export interface MissionSummary {
    * floor, so tagging it there would wrongly pull in every such mission once a user actually
    * focuses it — an unresolved repo shows on `ALL_FLOORS` only. */
   repo?: string;
+  /** Issue #261 review round 3: `mission.yaml`'s own optional `component: tooling | portal |
+   * agents | infra` — the mission author's own direct say on which hex wing it belongs in,
+   * read before `componentForRepo(repo)`'s own keyword guess ever runs. Needed because `repo`
+   * cannot carry this signal for a mission whose files live in a `project-management` repo
+   * (every Klever mission here does): the repo is the knowledge-base repo, not the product the
+   * mission is actually about. Never written here — Gabriel's own mission files are never
+   * edited by this office; a mission with no `component:` field keeps falling through to the
+   * repo guess exactly as before. */
+  component?: string;
 }
 
 export function parseRoots(list: string | undefined): string[] {
@@ -159,6 +168,8 @@ export function summarizeMission(slug: string, record: unknown, root?: string): 
     ...(text(mission.created) ? { createdAt: text(mission.created) } : {}),
     ...(status === 'done' || status === 'abandoned' ? (text(mission.updated) ? { closedAt: text(mission.updated) } : {}) : {}),
     ...(repo ? { repo } : {}),
+    // Issue #261 review round 3: read-only — this never writes `component` back to the record.
+    ...(text(mission.component) ? { component: text(mission.component) } : {}),
   };
 }
 
@@ -293,6 +304,7 @@ export function missionsPlugin(roots: string[], now: () => number = Date.now, gi
         ...(mission.createdAt ? { createdAt: mission.createdAt } : {}),
         ...(mission.closedAt ? { closedAt: mission.closedAt } : {}),
         ...(mission.repo ? { repo: mission.repo } : {}),
+        ...(mission.component ? { component: mission.component } : {}),
         walls: { statement: mission.statement, docs: mission.docs, issues: mission.issues, kanban: mission.kanban },
       })),
     }),

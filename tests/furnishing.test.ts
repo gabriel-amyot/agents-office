@@ -79,7 +79,9 @@ test('rooms.ts builds no furniture geometry inline: pieces come from the furnitu
   assert.doesNotMatch(rooms, /from '\.\.\/\.\.\/furniture\//, 'rooms.ts imports no factory directly');
   const furnishing = readFileSync(new URL('../src/addons/building/furnishing.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(furnishing, /new THREE\.|Geometry/, 'the plans hold positions only');
-  for (const kind of ['office', 'desks', 'library', 'lab', 'lounge'] as const) {
+  // Issue #260 (step 7a): 'desks', 'lab' and 'lounge' are retired room kinds — the hex Hub's
+  // own fixed spare desks and kitchen/play corner replace their overflow role.
+  for (const kind of ['office', 'library'] as const) {
     const plan = roomFurnishing(kind, { doorAlong: 0 });
     assert.ok(plan.pieces.length > 0, `${kind} has a plan`);
   }
@@ -141,7 +143,7 @@ test('issue #161 review round 2: the user\'s own office desk loses the stock mon
   assert.equal(overflowNames.includes('deskNoMonitor'), false);
 });
 
-function assertPathsClear(kind: 'office' | 'lounge', doorAlong: number) {
+function assertPathsClear(kind: 'office', doorAlong: number) {
   const plan = roomFurnishing(kind, { doorAlong });
   for (const placement of plan.pieces.filter(standsOnFloor)) {
     const box = footprint(placement);
@@ -186,7 +188,7 @@ function assertFarWallDoorClear(kind: RoomKind, doorAlong: number) {
 }
 
 test('no piece in any room kind blocks the far-wall door gap an outer room may need', () => {
-  for (const kind of ['office', 'desks', 'library', 'lab', 'lounge'] as const) {
+  for (const kind of ['office', 'library'] as const) {
     for (const doorAlong of REAL_DOOR_POSITIONS) assertFarWallDoorClear(kind, doorAlong);
   }
 });
@@ -229,18 +231,8 @@ test('a queue row fills completely, center-out, before the next row opens (#132)
   assert.equal(firstRow[firstRow.length - 1].a, 0, 'the exact center fills last within the row');
 });
 
-// --- The lounges ---
-
-test('each lounge has 8 or more plants, tall and small, and none blocks a seat or a door', () => {
-  for (const doorAlong of REAL_DOOR_POSITIONS) {
-    const plan = roomFurnishing('lounge', { doorAlong });
-    const plants = plan.pieces.filter((p) => p.piece.category === 'plant');
-    assert.ok(plants.length >= 8, `${plants.length} plants`);
-    assert.ok(plants.some((p) => p.piece.name === 'tallPlant') && plants.some((p) => p.piece.name === 'plant'), 'tall and small');
-    assert.equal(plan.spots.filter((s) => s.type === 'idle').length, 9, 'the nine sofa seats stay');
-    assertPathsClear('lounge', doorAlong);
-  }
-});
+// Issue #260 (step 7a): the 'lounge' room kind is retired — the hex Hub's own kitchen/play
+// corner is the idle overflow's new home, not a rented room with its own furnishing plan.
 
 // --- The portrait over your door ---
 
@@ -271,7 +263,7 @@ test('a second waiting room has no portrait and no count sign: only your office 
 });
 
 test('only the office has a portrait', () => {
-  for (const kind of ['desks', 'library', 'lab', 'lounge'] as const) {
+  for (const kind of ['library'] as const) {
     assert.equal(buildRoom(kind, slotFor(1), 1, []).group.getObjectByName(PORTRAIT_NAME), undefined, kind);
   }
 });

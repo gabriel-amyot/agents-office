@@ -16,8 +16,16 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => new Proxy({}, {
 })) as never;
 const { createOffice } = await import('../src/scene/Office.js');
 const { BuildingLayout, BUILDING_STORAGE_KEY, floorStorageKey } = await import('../src/addons/building/BuildingLayout.js');
-const { missionSlot, combinedBoard } = await import('../src/addons/building/missionRooms.js');
+const { testHexWarRoom, combinedBoard } = await import('../src/addons/building/missionRooms.js');
 const { projectWorld } = await import('../server/seam.js');
+
+/** A hex room's own AABB (issue #259), the same shape `missionSlot(index).rect` used to give
+ * these tests for the first (ordinal-0, default-wing) mission a fresh layout ever builds. */
+function hexRoomRect(room: ReturnType<typeof testHexWarRoom>) {
+  const xs = room.corners.map((c) => c.x);
+  const zs = room.corners.map((c) => c.z);
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
+}
 
 /** The same hashing `server/vitePlugin.ts` uses for `publicId`, with its own random key held
  * for the whole call (one key, so the same raw string always hashes the same, the way one
@@ -87,10 +95,10 @@ function setup(storage = new Map<string, string>(), floor?: string) {
   };
 }
 
-test('the building opens with the user office and the Library, and remembers its rooms', () => {
+test('the building opens with the user office, and remembers its rooms (issue #258: the Library is a hex room now, not a rect roomKind)', () => {
   const { layout, storage, scene } = setup();
-  assert.deepEqual(layout.roomKinds, ['office', 'library']);
-  assert.equal(storage.get(BUILDING_STORAGE_KEY), '["office","library"]');
+  assert.deepEqual(layout.roomKinds, ['office']);
+  assert.equal(storage.get(BUILDING_STORAGE_KEY), '["office"]');
   assert.ok(scene.getObjectByName('building-hall-walls'));
 });
 
@@ -109,8 +117,8 @@ test('a building constructed with a floor option saves its room list under that 
     floor: 'widget-service',
   });
 
-  assert.deepEqual(layout.roomKinds, ['office', 'library']);
-  assert.equal(storage.get(floorStorageKey('widget-service')), '["office","library"]');
+  assert.deepEqual(layout.roomKinds, ['office']);
+  assert.equal(storage.get(floorStorageKey('widget-service')), '["office"]');
   assert.equal(storage.has(BUILDING_STORAGE_KEY), false, 'a floor-scoped building never touches the legacy single-building key');
 });
 
@@ -121,12 +129,13 @@ test('two floors keep separate room lists in the same storage: growing one never
   new BuildingLayout(sceneA, createOffice(sceneA), { storage: backing, floor: 'agents-office' });
   const sceneB = new THREE.Scene();
   const layoutB = new BuildingLayout(sceneB, createOffice(sceneB), { storage: backing, floor: 'widget-service' });
-  // Fill Widget Service's implementing seats until it rents a desks room, mirroring the
-  // existing "the building rents a desk room ..." test below (10 seats fill the hall desks).
+  // Issue #260: implementing overflow no longer rents a 'desks' room (it absorbs into the hex
+  // Hub's own fixed spare desks instead), so Widget Service's own saved room list never grows
+  // past 'office' either — this still proves the two floors' room lists stay independent.
   for (let i = 0; i < 10; i++) layoutB.seatFor({ id: `agent-${i}`, activity: 'implementing' }, null);
 
-  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office', 'library']);
-  assert.ok(JSON.parse(storage.get(floorStorageKey('widget-service'))!).includes('desks'));
+  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office']);
+  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('widget-service'))!), ['office']);
 });
 
 // --- Lobby (issue #192): one office, never one per floor ---
@@ -137,7 +146,10 @@ test('the office always builds first, even with a stored room list that somehow 
   const scene = new THREE.Scene();
   const layout = new BuildingLayout(scene, createOffice(scene), { storage: backing, floor: 'widget-service' });
 
-  assert.deepEqual(layout.roomKinds, ['office', 'library', 'desks']);
+  // Issue #258: the stored 'library' entry is dropped (it is a hex room now, never a rect
+  // roomKind). Issue #260: 'desks' is dropped too (a retired rented kind) — the same silent
+  // drop every other retired rect kind already gets.
+  assert.deepEqual(layout.roomKinds, ['office']);
   assert.equal(scene.getObjectByName('room-0-office')?.name, 'room-0-office', 'the office still sits at index 0, the lobby\'s own fixed spot');
 });
 
@@ -196,7 +208,7 @@ test('the planning RoomKind no longer exists: the building never opens one', () 
 test('a saved building with an old planning room in storage drops it silently (#131)', () => {
   const storage = new Map<string, string>([[BUILDING_STORAGE_KEY, '["office","planning","library"]']]);
   const { layout } = setup(storage);
-  assert.deepEqual(layout.roomKinds, ['office', 'library'], 'the stale planning entry is filtered out, no error');
+  assert.deepEqual(layout.roomKinds, ['office'], 'the stale planning entry, and the stored library entry (hex now, issue #258), are both filtered out, no error');
 });
 
 test('an agent with no war room that writes docs stays at its desk, not the lounge (#141)', () => {
@@ -215,7 +227,7 @@ test('the review RoomKind no longer exists: the building never opens a writing r
 test('a saved building with an old writing room in storage drops it silently (#141)', () => {
   const storage = new Map<string, string>([[BUILDING_STORAGE_KEY, '["office","review","library"]']]);
   const { layout } = setup(storage);
-  assert.deepEqual(layout.roomKinds, ['office', 'library'], 'the stale review entry is filtered out, no error');
+  assert.deepEqual(layout.roomKinds, ['office'], 'the stale review entry, and the stored library entry (hex now, issue #258), are both filtered out, no error');
 });
 
 test('a short tool call does not make the agent walk', () => {
@@ -306,51 +318,46 @@ test('your turn without a wait time stays out of the queue, as before', () => {
   assert.doesNotMatch(seat.key, /queue/);
 });
 
-test('the building rents a desk room when the hall desks are taken, and rebuilds it after a reload', () => {
-  const { layout, agent, storage } = setup();
+// Issue #260 (step 7a): the rented 'desks' room is gone — overflow past the hall's own 8 desks
+// goes to the hex Hub's own spare desks instead of a new rect room.
+test('the hall desks overflow onto the hex hub\'s own spare desks, never a rented room', () => {
+  const { layout, agent } = setup();
   const seats = Array.from({ length: 10 }, (_, i) => layout.seatFor(agent(`s${i}`, 'implementing'), null)!);
   assert.equal(new Set(seats.map((s) => s.key)).size, 10);
-  assert.deepEqual(layout.roomKinds, ['office', 'library', 'desks']);
-
-  const reloaded = setup(storage).layout;
-  assert.deepEqual(reloaded.roomKinds, ['office', 'library', 'desks']);
+  assert.deepEqual(layout.roomKinds, ['office'], 'no new rect room opens for the overflow');
+  assert.ok(seats.some((seat) => seat.key.startsWith('hex-hub-desk-')), 'the overflow desks are the hub\'s own');
 });
 
-test('a saved 3-room layout rents each kind at the slot its index gives it, the same way on every reload (issue #128 review round 2)', () => {
-  // Rooms are remembered by kind, in rental order, and rented back in that same order on
-  // reload (`roomKinds` above): slotFor(index) decides where each one physically sits, by
-  // index alone, not by kind. For office/library/desks that is slot 0 (east-center, unmoved),
-  // slot 1 (south-east since issue #120's swap) and slot 2 (north-east, where the Library
-  // itself used to sit before that swap). This is the one-time move the swap causes for
-  // anyone with an existing saved building of 3 or more rooms: whatever room was third stays
-  // third, but the ground under it moved. Noted in README.md and CHANGELOG.md.
-  //
-  // This asserts the layout's own built rooms (by their `room-${index}-${kind}` name in the
-  // scene, `src/addons/building/rooms.ts`), not `slotFor` in isolation: a bug in `addRoom`
-  // that called `slotFor` with the wrong index would still leave `slotFor` itself correct,
-  // and a test that only re-checked `slotFor` would never see it (issue #128 review round 2).
+test('the desks RoomKind no longer exists: the building never opens one (issue #260)', () => {
+  const { layout } = setup();
+  assert.ok(!layout.roomKinds.includes('desks' as never), 'no desks room kind is ever recorded');
+});
+
+test('a saved building with an old desks (and library) entry in storage drops both silently (issue #258, issue #260)', () => {
   const storage = new Map([[BUILDING_STORAGE_KEY, JSON.stringify(['office', 'library', 'desks'])]]);
-  const { layout, scene } = setup(storage);
-  assert.deepEqual(layout.roomKinds, ['office', 'library', 'desks']);
-  const office = builtRoomRect(scene, 0, 'office');
-  const library = builtRoomRect(scene, 1, 'library');
-  const desks = builtRoomRect(scene, 2, 'desks');
-  assert.deepEqual(office, { minX: 15, maxX: 27, minZ: -6, maxZ: 6 }, 'office: east-center, unmoved');
-  assert.ok(library.minZ > 0, `library: south-east (issue #120), got ${JSON.stringify(library)}`);
-  assert.ok(desks.minZ < 0, `desks: north-east, where the library used to be, got ${JSON.stringify(desks)}`);
-
-  // Reloading the same saved kind order again lands every room at the same physical rect.
-  const again = setup(new Map(storage));
-  assert.deepEqual(again.layout.roomKinds, layout.roomKinds);
-  assert.deepEqual(builtRoomRect(again.scene, 0, 'office'), office, 'office: same rect after reload');
-  assert.deepEqual(builtRoomRect(again.scene, 1, 'library'), library, 'library: same rect after reload');
-  assert.deepEqual(builtRoomRect(again.scene, 2, 'desks'), desks, 'desks: same rect after reload');
+  const { layout } = setup(storage);
+  assert.deepEqual(layout.roomKinds, ['office'], 'the stale library and desks entries are both filtered out, no error');
 });
 
-test('idle agents beyond the hall seats get a lounge room', () => {
+// Issue #260: idle overflow past the hall's own coffee/sofa spots goes to the hex Hub's own
+// kitchen/play corner instead of a rented lounge room.
+test('idle agents beyond the hall seats overflow onto the hex hub\'s own idle spots, never a rented lounge', () => {
   const { layout, agent } = setup();
-  for (let i = 0; i < 10; i++) layout.seatFor(agent(`i${i}`, 'idle'), null);
-  assert.ok(layout.roomKinds.includes('lounge'));
+  const seats = Array.from({ length: 10 }, (_, i) => layout.seatFor(agent(`i${i}`, 'idle'), null)!);
+  assert.ok(!layout.roomKinds.includes('lounge' as never));
+  assert.ok(seats.some((seat) => seat.key.startsWith('hex-hub-idle-')), 'the overflow idle spots are the hub\'s own');
+});
+
+test('the lounge RoomKind no longer exists: the building never opens one (issue #260)', () => {
+  const { layout } = setup();
+  assert.ok(!layout.roomKinds.includes('lounge' as never), 'no lounge room kind is ever recorded');
+});
+
+test('testing overflow past the hall\'s own 2 test stations falls back to the idle corner, not a rented lab (issue #260)', () => {
+  const { layout, agent } = setup();
+  const seats = Array.from({ length: 4 }, (_, i) => layout.seatFor(agent(`t${i}`, 'testing'), null)!);
+  assert.ok(!layout.roomKinds.includes('lab' as never));
+  assert.ok(seats.some((seat) => seat.key.includes('coffee') || seat.key.includes('sofa') || seat.key.startsWith('hex-hub-idle-')));
 });
 
 test('subagents gather around their parent desk', () => {
@@ -376,16 +383,17 @@ const missionRoom = (state: 'open' | 'locked' = 'open') => ({
   walls: { statement: 'Ship it', docs: ['Explainer'], issues: [{ number: 46, title: 'Parent', state: 'open' as const }], kanban: [] },
 });
 
-test('a mission becomes a war room north of the hall, with a door in the hall back wall', () => {
+// Issue #259: a mission becomes a hex war room in its own component wing now, not a rect room
+// chained to the hall through the mission corridor (deleted) — the hall never gets a door for
+// it at all; it is reachable only through the hex structure's own Hub and walkway.
+test('a mission becomes a hex war room, reachable by name and never through the hall', () => {
   const { layout, scene } = setup();
   layout.syncWorldRooms([missionRoom()]);
   assert.equal(layout.missionRoomCount, 1);
   const room = scene.getObjectByName('mission-room-0')!;
-  const floor = room.children.find((c) => c.userData.floor)!;
-  assert.ok(floor.position.z < -13, 'north of the hall');
-  const hallWalls = scene.getObjectByName('building-hall-walls')!;
-  const northPieces = hallWalls.children.filter((w) => Math.abs(w.position.z + 13) < 0.01);
-  assert.ok(northPieces.length >= 2, 'the back wall has a door gap');
+  assert.ok(room, 'the mission room group exists');
+  assert.equal(room.children.some((c) => c.userData.floor), false, 'no floor of its own: the hex zones already draw one');
+  assert.ok(layout.roomView('room-1'), 'reachable by its own public id, the same as any other room');
 });
 
 test('agents of a mission work in its war room, their helpers stand near them, and a locked room keeps them out', () => {
@@ -411,10 +419,12 @@ test('agents of a mission work in its war room, their helpers stand near them, a
 // `combinedBoard`'s shared canvas, its own region (index 2 of the same 3 specs
 // `buildMissionRoom` passes it — only `width`/`height` affect a region's own bounds), so a
 // hit's `uv.y` is in that shared canvas's full UV space, not a region-local [0, 1].
+// Issue #259 review round 2: the display wall's own board grid shrank along with the room
+// (BOARD_W/BOARD_H, `buildMissionRoom`'s own constants) — same 3 specs, smaller dimensions.
 const kanbanRegion = combinedBoard([
-  { width: 3.6, height: 1.6, position: new THREE.Vector3(), rotationY: 0 },
-  { width: 2.4, height: 1.6, position: new THREE.Vector3(), rotationY: 0 },
-  { width: 3.6, height: 1.8, position: new THREE.Vector3(), rotationY: 0 },
+  { width: 1.4, height: 0.8, position: new THREE.Vector3(), rotationY: 0 },
+  { width: 1.4, height: 0.8, position: new THREE.Vector3(), rotationY: 0 },
+  { width: 1.4, height: 0.8, position: new THREE.Vector3(), rotationY: 0 },
 ]).regionOf(2);
 const SECTION_TOP_PX = kanbanRegion.h / 2;
 const uvForCanvasY = (y: number) => kanbanRegion.vBottom + (1 - y / kanbanRegion.h) * (kanbanRegion.vTop - kanbanRegion.vBottom);
@@ -498,8 +508,12 @@ test('the legacy room list migrates forward to the first specific floor ever foc
     floor: 'agents-office',
   });
 
-  assert.deepEqual(layout.roomKinds, ['office', 'library', 'desks']);
-  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office', 'library', 'desks']);
+  // Issue #258: the copied legacy list still carries 'library'; issue #260 adds 'desks' to the
+  // same pile — but the floor key is immediately overwritten by this same construction's own
+  // `saveRooms()` with the real, filtered room list (both are retired rect kinds now) — the
+  // legacy key itself is the only place the raw copied value survives, untouched.
+  assert.deepEqual(layout.roomKinds, ['office']);
+  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office']);
   assert.deepEqual(JSON.parse(storage.get(BUILDING_STORAGE_KEY)!), ['office', 'library', 'desks'], 'left behind, not deleted');
 });
 
@@ -510,7 +524,7 @@ test('migration runs only once: a second floor, focused later, starts with no ro
   new BuildingLayout(new THREE.Scene(), createOffice(new THREE.Scene()), { storage: backing, floor: 'agents-office' });
   const second = new BuildingLayout(new THREE.Scene(), createOffice(new THREE.Scene()), { storage: backing, floor: 'widget-service' });
 
-  assert.deepEqual(second.roomKinds, ['office', 'library'], 'the ordinary cold-start default, not the migrated legacy list');
+  assert.deepEqual(second.roomKinds, ['office'], 'the ordinary cold-start default, not the migrated legacy list');
 });
 
 test('a floor that already has its own room list is never overwritten by the legacy migration', () => {
@@ -522,7 +536,10 @@ test('a floor that already has its own room list is never overwritten by the leg
     storage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => void storage.set(k, v) },
     floor: 'agents-office',
   });
-  assert.deepEqual(layout.roomKinds, ['office', 'library']);
+  // The already-stored floor list is never replaced by the legacy one (the migration's own
+  // guarantee); issue #258 still drops its 'library' entry the ordinary way, same as any
+  // other stored room list.
+  assert.deepEqual(layout.roomKinds, ['office']);
 });
 
 test('"all floors" never migrates: it keeps reading the legacy key directly, same as before floors existed', () => {
@@ -530,7 +547,46 @@ test('"all floors" never migrates: it keeps reading the legacy key directly, sam
   const layout = new BuildingLayout(new THREE.Scene(), createOffice(new THREE.Scene()), {
     storage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => void storage.set(k, v) },
   });
-  assert.deepEqual(layout.roomKinds, ['office', 'library', 'desks']);
+  assert.deepEqual(layout.roomKinds, ['office']);
+});
+
+// Issue #260 review (the BMAD party's own condition on the 7a split): the migration writes two
+// keys, the copied floor data then the "migrated" marker — a storage write that throws between
+// them (quota exceeded, a blocked write) must never leave corrupt or double-copied state behind,
+// and a later construction must still converge safely. `migrateLegacyRooms` already writes the
+// data key first and the marker second specifically so a failure after the first write is safe
+// to retry (the `!already` guard skips a second copy once the floor key holds anything at all);
+// this proves it, not just documents it.
+test('a storage write that fails between the copied data and the "migrated" marker leaves no corrupt state, and a retry still converges', () => {
+  const MIGRATED_KEY = 'agents-office.building.rooms.migrated';
+  const storage = new Map([[BUILDING_STORAGE_KEY, JSON.stringify(['office', 'library', 'desks'])]]);
+  let failMarkerWrite = true;
+  const flaky = {
+    getItem: (k: string) => storage.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      if (k === MIGRATED_KEY && failMarkerWrite) throw new Error('quota exceeded');
+      storage.set(k, v);
+    },
+  };
+
+  let firstLayout: InstanceType<typeof BuildingLayout> | undefined;
+  assert.doesNotThrow(() => { firstLayout = new BuildingLayout(new THREE.Scene(), createOffice(new THREE.Scene()), { storage: flaky, floor: 'agents-office' }); },
+    'the constructor never throws, even when a storage write fails mid-migration');
+
+  // The data write before the failure point still landed (the copy, then this same
+  // construction's own saveRooms() immediately overwriting it with the real, filtered list —
+  // the same thing the non-flaky migration test above shows); the marker never did.
+  assert.deepEqual(firstLayout!.roomKinds, ['office'], 'the building still works this page load, migration failure or not');
+  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office']);
+  assert.equal(storage.has(MIGRATED_KEY), false, 'the marker never wrote, since the mocked failure point threw before it could');
+
+  failMarkerWrite = false;
+  const retried = new BuildingLayout(new THREE.Scene(), createOffice(new THREE.Scene()), { storage: flaky, floor: 'agents-office' });
+  // The retry must not re-copy the legacy list on top of whatever is already there (the `!already`
+  // guard): the floor key is untouched by the copy step, only read and filtered as usual.
+  assert.deepEqual(retried.roomKinds, ['office'], 'the stale library/desks entries still drop the ordinary way, no double-copy');
+  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office']);
+  assert.ok(storage.has(MIGRATED_KEY), 'the marker finally writes once the mocked failure clears');
 });
 
 // --- Issue #126: war-room furniture routes agent activity, in-room first ---
@@ -600,20 +656,27 @@ test('AC5: a researching mission agent never goes to the library-knowledge shelv
   const { layout, agent } = setup();
   layout.syncWorldRooms([missionRoom()]);
   const seat = layout.seatFor(agent('r', 'researching', { room: 'room-1' }), null)!;
-  assert.doesNotMatch(seat.key, /^room1_researching_/, 'room1 is the building Library, not the war room');
+  assert.doesNotMatch(seat.key, /^hex-library-/, 'hex-library- is the building Library, not the war room');
 });
 
-test('AC4: once the room\'s one researching spot is taken, the next researcher still stays in the room, not a dedicated room', () => {
+// Issue #259 review round 2: there is no generic "room:<id>" ring any more (no meeting table,
+// no standing ring — Gabriel's own round-6 base set is work furniture only). Once a war room's
+// one piece of a kind is taken, the next agent of that same activity has nowhere room-specific
+// left and falls through to the main room's lounge, the same graceful-degradation path
+// `BuildingLayout.claimInRoom` already used for "no free spot of any kind".
+test('AC4: once the room\'s one researching spot is taken, the next researcher falls through to the lounge, not a dedicated room', () => {
   const { layout, agent } = setup();
   layout.syncWorldRooms([missionRoom()]);
   layout.seatFor(agent('r1', 'researching', { room: 'room-1' }), null);
   const seat = layout.seatFor(agent('r2', 'researching', { room: 'room-1' }), null)!;
-  assert.match(seat.key, /^mission0_/, 'still in the war room: the generic ring, not the library or a dedicated room');
+  assert.doesNotMatch(seat.key, /^mission0_/, 'no war-room ring left to fall back to');
+  assert.doesNotMatch(seat.key, /^hex-library-/, 'not the library either');
 });
 
-// --- Issue #129: a 9th desk-like agent overflows to the room's standing ring, not a 9th desk ---
+// --- Issue #129/#259 review round 2: a desk-cap overflow has no standing ring any more — it
+// falls through to the lounge, the same as any other kind of war-room overflow. ---
 
-test('AC4 (#129): once a war room\'s desk cap is full, the next desk-like agent uses the room\'s standing ring', () => {
+test('AC4 (#129): once a war room\'s desk cap is full, the next desk-like agent falls through to the lounge', () => {
   const { layout, agent, tick } = setup();
   layout.syncWorldRooms([missionRoom()]);
   for (let i = 0; i < 8; i++) layout.seatFor(agent(`d${i}`, 'implementing', { room: 'room-1' }), null);
@@ -621,36 +684,13 @@ test('AC4 (#129): once a war room\'s desk cap is full, the next desk-like agent 
   for (let i = 0; i < 8; i++) layout.seatFor(agent(`d${i}`, 'implementing', { room: 'room-1' }), null);
   const overflow = layout.seatFor(agent('d8', 'implementing', { room: 'room-1' }), null)!;
   assert.doesNotMatch(overflow.key, /_furniture_/, 'no extra desk piece');
-  // mission0_seat_0 through 7 are the meeting table's own seats (TABLE_SEATS,
-  // missionRooms.ts); 8 and up are the standing ring. A desk-cap overflow must stand.
-  assert.doesNotMatch(overflow.key, /^mission0_seat_[0-7]$/, 'not seated at the meeting table');
-  assert.match(overflow.key, /^mission0_seat_/, 'the room\'s own standing ring instead');
-});
-
-// --- Issue #129 review round 2: the standing ring fills before the meeting table's own
-// seats, even though they share one station type (posture is the only difference) ---
-
-test('every desk-cap overflow stands, until the standing ring itself is full', () => {
-  const { layout, agent, tick } = setup();
-  layout.syncWorldRooms([missionRoom()]);
-  // room-1's door is off-center (missionSlot's first wing column, issue #125 review): 3 desk slots here.
-  for (let i = 0; i < 3; i++) layout.seatFor(agent(`d${i}`, 'implementing', { room: 'room-1' }), null);
-  tick(0);
-  for (let i = 0; i < 3; i++) layout.seatFor(agent(`d${i}`, 'implementing', { room: 'room-1' }), null);
-  // STANDING_SPOTS (missionRooms.ts) is 12: every one of the next 12 overflow agents must stand.
-  for (let i = 0; i < 12; i++) {
-    const seat = layout.seatFor(agent(`o${i}`, 'implementing', { room: 'room-1' }), null)!;
-    assert.doesNotMatch(seat.key, /^mission0_seat_[0-7]$/, `overflow ${i} sat at the meeting table instead of standing`);
-  }
-  // The 13th overflow: every desk and every standing spot is full, so only the table's own seats are left.
-  const lastResort = layout.seatFor(agent('o12', 'implementing', { room: 'room-1' }), null)!;
-  assert.match(lastResort.key, /^mission0_seat_[0-7]$/, 'the meeting table\'s own seats, the true last resort');
+  assert.doesNotMatch(overflow.key, /^mission0_/, 'no war-room ring left to fall back to');
 });
 
 // --- Issue #126 review round 2: growth must actually reach seating, and an activity change
 // inside the same room must re-run claimInRoom, through the real BuildingLayout ---
 
-test('a desk-like agent moves onto a grown desk once one exists, not forever stuck on the generic ring', () => {
+test('a desk-like agent moves onto a grown desk once one exists, not left in the lounge', () => {
   const { layout, agent, tick } = setup();
   layout.syncWorldRooms([missionRoom()]);
   // Issue #209: the base work set's own desk is there from the start, so the first
@@ -661,7 +701,7 @@ test('a desk-like agent moves onto a grown desk once one exists, not forever stu
 
   const b = agent('b', 'implementing', { room: 'room-1' });
   const firstB = layout.seatFor(b, null)!;
-  assert.match(firstB.key, /^mission0_seat_/, 'no second desk exists yet: the generic ring');
+  assert.doesNotMatch(firstB.key, /^mission0_/, 'no second desk exists yet, and no war-room ring left: the lounge');
 
   tick(0); // grows a second desk, now that two implementing agents are counted in the room
   // Same activity, same room target string: only an activity-aware re-check (not the
@@ -670,7 +710,7 @@ test('a desk-like agent moves onto a grown desk once one exists, not forever stu
   const moves = tick(4000); // past the dwell time
   const move = moves.find((m) => m.agentId === 'b');
   assert.ok(move, 'agent b is moved once the dwell time passes');
-  assert.match(move!.seat.key, /mission0_furniture_/, 'onto the grown desk, not left on the generic ring');
+  assert.match(move!.seat.key, /mission0_furniture_/, 'onto the grown desk, not left in the lounge');
 });
 
 // --- Issue #126 review round 3: growing one furniture station must never carry its
@@ -858,7 +898,7 @@ test('roomView matches a mission room by its slugified title or its public id �
   const byId = layout.roomView(projected.id)!;
   assert.deepEqual(byId, byTitle, 'the exact public id also works, for a reviewer who copies it from /api/world');
 
-  const missionRect = missionSlot(0).rect;
+  const missionRect = hexRoomRect(testHexWarRoom(0));
   assert.deepEqual([byTitle.bounds.min.x, byTitle.bounds.max.x, byTitle.bounds.min.z, byTitle.bounds.max.z],
     [missionRect.minX, missionRect.maxX, missionRect.minZ, missionRect.maxZ]);
 });
@@ -996,15 +1036,15 @@ test('roomAt reports the room\'s own kind (issue #239: so a caller can special-c
   const officeCenter = { x: (officeRect.minX + officeRect.maxX) / 2, z: (officeRect.minZ + officeRect.maxZ) / 2 };
   assert.equal(layout.roomAt(officeCenter.x, officeCenter.z)?.kind, 'office');
 
-  const libraryRect = slotFor(1).rect; // BuildingLayout force-adds the library as room index 1
-  const libraryCenter = { x: (libraryRect.minX + libraryRect.maxX) / 2, z: (libraryRect.minZ + libraryRect.maxZ) / 2 };
+  // Issue #258: the Library is the hex room behind the hex Office now, not rect room index 1.
+  const libraryCenter = layout.roomView('library')!.bounds.getCenter(new THREE.Vector3());
   assert.equal(layout.roomAt(libraryCenter.x, libraryCenter.z)?.kind, 'library');
 });
 
 test('roomAt finds a mission room by its own rect, not just building rooms', () => {
   const { layout } = setup();
   layout.syncWorldRooms([{ id: 'm0', kind: 'mission', title: 'Media Plan', state: 'open', walls: {} }]);
-  const rect = missionSlot(0).rect;
+  const rect = hexRoomRect(testHexWarRoom(0));
   const centerX = (rect.minX + rect.maxX) / 2;
   const centerZ = (rect.minZ + rect.maxZ) / 2;
   const hit = layout.roomAt(centerX, centerZ)!;
@@ -1041,14 +1081,14 @@ test('roomAt between the hub and the hex office (on the walkway, not inside eith
 test('the Librarian persona badge reaches the Library room before the hall shelves (issue #128)', () => {
   const { layout, agent } = setup();
   const seat = layout.seatFor(agent('r', 'researching', { badges: ['librarian'] }), null)!;
-  assert.match(seat.key, /^room1_researching_/);
+  assert.match(seat.key, /^hex-library-/);
 });
 
 test('a librarian walks to the Library to research and back to its agent with what it found', () => {
   const { layout, agent, tick } = setup();
   const desk = layout.seatFor(agent('parent', 'implementing'), null)!;
   const fetching = layout.seatFor(agent('lib', 'researching', { parentId: 'parent', badges: ['librarian'] }), null)!;
-  assert.match(fetching.key, /^room1_researching_/);
+  assert.match(fetching.key, /^hex-library-/);
 
   layout.seatFor(agent('lib', 'writing_docs', { parentId: 'parent', badges: ['librarian'] }), 'researching');
   const back = tick(4500).find((m) => m.agentId === 'lib')!;
@@ -1059,13 +1099,13 @@ test('a librarian walks to the Library to research and back to its agent with wh
 test('an old-style role tag, with no Librarian persona badge, no longer reaches the Library (issue #128, Prospero\'s review)', () => {
   const { layout, agent } = setup();
   const seat = layout.seatFor(agent('r', 'researching', { role: 'librarian' }), null)!;
-  assert.doesNotMatch(seat.key, /^room1_researching_/, 'a name or role tag alone is not the persona signal');
+  assert.doesNotMatch(seat.key, /^hex-library-/, 'a name or role tag alone is not the persona signal');
 });
 
 test('a main session with no Librarian badge and no war room keeps its own desk for a research trip, not the Library (issue #128 AC2)', () => {
   const { layout, agent } = setup();
   const seat = layout.seatFor(agent('r', 'researching'), null)!;
-  assert.doesNotMatch(seat.key, /^room1_researching_/);
+  assert.doesNotMatch(seat.key, /^hex-library-/);
   assert.doesNotMatch(seat.key, /researching/, 'it never visits any researching station, hall shelves included');
   assert.match(seat.key, /^desk_/);
 });
@@ -1078,7 +1118,7 @@ test('a main session with a war room keeps a non-librarian research trip inside 
   // room's own bookshelf (`mission0_furniture_*`) over its generic ring (`mission0_seat_*`).
   // Either one satisfies this AC's real point, inside the war room and never the Library.
   assert.match(seat.key, /^mission0_(seat|furniture)_/, 'inside its own war room');
-  assert.doesNotMatch(seat.key, /^room1_researching_/, 'never the Library');
+  assert.doesNotMatch(seat.key, /^hex-library-/, 'never the Library');
 });
 
 test('an ordinary subagent that researches stays at its parent desk', () => {
@@ -1147,7 +1187,7 @@ test('a non-librarian subagent whose parent has no seat yet never reaches the Li
   // routing must still never land on the Library's own shelves.
   const { layout, agent } = setup();
   const seat = layout.seatFor(agent('helper', 'researching', { parentId: 'parent' }), null)!;
-  assert.doesNotMatch(seat.key, /^room1_researching_/, 'never the Library, even with an unseated parent');
+  assert.doesNotMatch(seat.key, /^hex-library-/, 'never the Library, even with an unseated parent');
   assert.doesNotMatch(seat.key, /_pod\d$/, 'there is no parent seat yet to anchor a pod spot to');
 });
 
@@ -1155,7 +1195,7 @@ test('a librarian subagent still reaches the Library even though its parent alre
   const { layout, agent } = setup();
   layout.seatFor(agent('parent', 'implementing'), null);
   const seat = layout.seatFor(agent('lib', 'researching', { parentId: 'parent', badges: ['librarian'] }), null)!;
-  assert.match(seat.key, /^room1_researching_/);
+  assert.match(seat.key, /^hex-library-/);
 });
 
 // --- Issue #120: the library wing moves to the south-east ---
@@ -1183,7 +1223,7 @@ test('tagged sessions sit at the hall desks with everyone else; no desk room is 
   const b1 = layout.seatFor(agent('b1', 'implementing', inWorkspace('Beta')), null)!;
   const loner = layout.seatFor(agent('n', 'implementing'), null)!;
 
-  assert.deepEqual(layout.roomKinds, ['office', 'library'], 'no new room for two workspaces of one session each');
+  assert.deepEqual(layout.roomKinds, ['office'], 'no new room for two workspaces of one session each');
   assert.match(a1.key, /^desk_/);
   assert.match(b1.key, /^desk_/);
   assert.match(loner.key, /^desk_/);
@@ -1223,8 +1263,10 @@ test('a stored desks@<workspace> room does not come back after a reload', () => 
   const storage = new Map([[BUILDING_STORAGE_KEY, JSON.stringify(['office', 'library', 'desks@proxy'])]]);
   const { layout } = setup(storage);
 
-  assert.deepEqual(layout.roomKinds, ['office', 'library']);
-  assert.deepEqual(JSON.parse(storage.get(BUILDING_STORAGE_KEY)!), ['office', 'library']);
+  // Issue #258: 'library' drops too (a hex room now, never a rect roomKind), the same as the
+  // workspace-tagged desks entry this test is really about.
+  assert.deepEqual(layout.roomKinds, ['office']);
+  assert.deepEqual(JSON.parse(storage.get(BUILDING_STORAGE_KEY)!), ['office']);
 });
 
 test('a session whose workspace becomes known later keeps its desk; home is for life', () => {
@@ -1258,4 +1300,79 @@ test('the missions board exists from the start, empty, and updates as missions a
   tick(1500);
   // Still mounted: a closed mission does not remove the board or itself from it
   assert.ok(scene.getObjectByName('missions-board'));
+});
+
+// --- Issue #261 review: overflow must never stack two agents on one station ---
+
+test('60 agents each land on a unique station: idle overflow never hands out an already-occupied spot (review-261 finding 1)', () => {
+  const { layout, agent } = setup();
+  const positions = new Set<string>();
+  for (let i = 0; i < 60; i++) {
+    const seat = layout.seatFor(agent(`agent-${i}`, 'implementing'), null)!;
+    const key = `${seat.position.x.toFixed(2)},${seat.position.z.toFixed(2)}`;
+    assert.ok(!positions.has(key), `agent ${i} landed on an already-claimed position ${key} (${seat.key})`);
+    positions.add(key);
+  }
+  assert.equal(positions.size, 60, 'every one of 60 agents gets its own seat, none stacked');
+});
+
+test('overflow idle stations beyond the Hub\'s fixed capacity are new, distinct stations, not the same key reused', () => {
+  const { layout, agent } = setup();
+  const keys = new Set<string>();
+  // The hall (8) and the Hub (4) together carry 12 fixed idle stations; well past that.
+  for (let i = 0; i < 20; i++) keys.add(layout.seatFor(agent(`idle-${i}`, 'idle'), null)!.key);
+  assert.equal(keys.size, 20, 'every idle agent claims a distinct station key');
+});
+
+test('research overflow never rents the old rectangular library room again (review-261 finding 2)', () => {
+  const { layout, agent, scene } = setup();
+  // 2 hex-library shelves + 2 hall shelves = 4 fixed researching stations; push well past that.
+  for (let i = 0; i < 12; i++) {
+    layout.seatFor(agent(`librarian-${i}`, 'researching', { badges: ['librarian'] }), null);
+  }
+  for (const record of scene.children) {
+    assert.doesNotMatch(record.name ?? '', /-library$/, `a rect library room was built: ${record.name}`);
+  }
+  assert.equal(scene.getObjectByName('room-1-library'), undefined, 'the rect library room must never build');
+  assert.deepEqual(layout.roomKinds, ['office'], 'library is never a rented roomKind again');
+});
+
+test('research overflow past the fixed shelves still lands every librarian on its own spot, inside the Library', () => {
+  const { layout, agent } = setup();
+  const keys = new Set<string>();
+  // The first 4 (2 hex-library shelves + 2 hall shelves) claim the fixed stations; every
+  // one past that must still be a unique, real spot — and once those 4 are gone, the
+  // Library's own overflow spiral, never a rented room.
+  for (let i = 0; i < 12; i++) {
+    const seat = layout.seatFor(agent(`librarian-${i}`, 'researching', { badges: ['librarian'] }), null)!;
+    if (i >= 4) assert.match(seat.key, /^hex-library-/, 'overflow still lands inside the Library, never a rented room');
+    keys.add(seat.key);
+  }
+  assert.equal(keys.size, 12, 'every librarian gets its own distinct spot, none stacked');
+});
+
+// --- Issue #261 review finding 3: a wing rebuild must never un-occupy a still-held station ---
+
+test('a station still held by an agent stays occupied across a wing rebuild (review-261 finding 3)', () => {
+  const { layout, agent } = setup();
+  // The hall's own 8 idle stations (coffee/sofa) come before the hex Hub's own 4
+  // (`hex-hub-idle-*`) in claim order; fill them first so the next idle agent is
+  // forced onto a hub station, the one kind `addHexHubStations` re-registers on
+  // every wing rebuild.
+  for (let i = 0; i < 8; i++) layout.seatFor(agent(`filler-${i}`, 'idle'), null);
+  const idleAgent = layout.seatFor(agent('idle-holder', 'idle'), null)!;
+  assert.match(idleAgent.key, /^hex-hub-idle-/, 'test setup: the holder must land on a hub idle station');
+
+  // Growing a new mission wing tears down and rebuilds the hex Hub/Library group
+  // (`rebuildHexOffice`), which used to re-register every hub/library station from
+  // scratch and silently reset `occupied` to false on every one of them.
+  layout.syncWorldRooms([{
+    id: 'm-1', kind: 'mission', title: 'Mission 1', state: 'open',
+    walls: { statement: 'x', docs: [], issues: [], kanban: [] },
+  }]);
+
+  // A second agent asking for the same idle station type must never be handed the
+  // key `idle-holder` is still standing at.
+  const secondIdle = layout.seatFor(agent('idle-holder-2', 'idle'), null)!;
+  assert.notEqual(secondIdle.key, idleAgent.key, 'the first idle agent\'s station must still read occupied after the rebuild');
 });

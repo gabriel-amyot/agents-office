@@ -29,12 +29,16 @@ import { markStatic } from '../../scene/StaticMerge.js';
 import type { WallRect } from '../../layout/LayoutStrategy.js';
 import {
   buildHexOfficeLayout,
+  buildHexWorld,
   hexWallSegments,
   hexWallColliders,
   hexSurfaceHeightAt,
+  hexRoomFrame,
+  hubFurnitureSpots,
   pointInPolygon,
   type HexOfficeLayout,
   type HexRoomGeometry,
+  type HexWorldCounts,
   HEX_WALL_HEIGHT,
   HEX_WALL_THICKNESS,
   WALKWAY_HEIGHT,
@@ -42,6 +46,7 @@ import {
 } from './HexRoomPlanner.js';
 import type { HexPoint } from './HexPlanner.js';
 import { FIGURE_EYE_HEIGHT } from '../../characters/StickFigureParts.js';
+import { createDesk } from '../../furniture/Desk.js';
 
 /** A stone tone distinct from the rect building's own `Colors.wall`, so the two structures
  * read as separate at a glance in the isometric view. */
@@ -79,16 +84,15 @@ function orientedBox(from: THREE.Vector3, to: THREE.Vector3, crossA: number, cro
   return mesh;
 }
 
-/** A hex room's floor: a flat polygon fan from its center. Deliberately NOT tagged
- * `userData.floor` (unlike every rect room's floor): that tag feeds `overviewBounds`'
- * `floorUnder`, which unions every floor's world bounds into the isometric camera's default
- * pan/zoom limits. This structure sits `HEX_OFFSET` away from the rect building on purpose
- * (clear of its own growth); including it in those bounds by default zoomed the whole
- * isometric view out far enough to drop "Your office"'s label under the 22 px readability
- * floor (`tests/wayfinding.test.ts`) — a real regression for every existing room, not a cost
- * worth paying before this structure has its own reason to share the camera's default frame.
- * The structure is still fully reachable (`wallColliders`/`surfaceHeightAt` below) and its own
- * screenshot is taken by panning/zooming there deliberately, not by the default view. */
+/** A hex room's floor: a flat polygon fan from its center. Tagged `userData.floor` (issue
+ * #260, step 7a part c): that tag feeds `overviewBounds`'s `floorBounds`, which unions every
+ * floor's world bounds into the isometric camera's default pan/zoom limits. Step 2 deliberately
+ * left this untagged while `HEX_OFFSET` sat 360 units from the rect building — it zoomed the
+ * default view out far enough to drop "Your office"'s label under the 22 px readability floor
+ * (`tests/wayfinding.test.ts`). Now that the hex structure sits just outside the rect hall
+ * (`HEX_OFFSET`, step 7a part b), the default isometric overview should show the whole
+ * building, rect lobby and hex wings together, not just one or the other; the real-size
+ * label-readability test is what actually proves the margin still holds. */
 function buildHexFloor(room: HexRoomGeometry, color: number): THREE.Mesh {
   const positions: number[] = [];
   for (let i = 0; i < 6; i++) {
@@ -107,13 +111,15 @@ function buildHexFloor(room: HexRoomGeometry, color: number): THREE.Mesh {
   const mesh = new THREE.Mesh(geometry, getToonMaterial(color));
   mesh.name = 'hex-floor';
   mesh.receiveShadow = true;
+  mesh.userData.floor = true;
   return mesh;
 }
 
-/** The 5 wall segments of a hex room (its stair's own edge left open), one mesh per segment,
- * all sharing the same material so they merge into the room's shared wall batch. */
+/** The wall segments of a hex room (its stairs' own edges left open — the office has two,
+ * everything else has one), one mesh per segment, all sharing the same material so they
+ * merge into the room's shared wall batch. */
 function buildHexWalls(room: HexRoomGeometry, material: THREE.Material): THREE.Mesh[] {
-  return hexWallSegments(room.center, room.radius, room.openEdge).map((segment) =>
+  return hexWallSegments(room.center, room.radius, room.openEdges).map((segment) =>
     orientedBox(v3(segment.a, HEX_WALL_HEIGHT / 2), v3(segment.b, HEX_WALL_HEIGHT / 2), HEX_WALL_HEIGHT, HEX_WALL_THICKNESS, material),
   );
 }
@@ -171,22 +177,27 @@ function buildKitchenCorner(): THREE.Group {
  * the rect room keeps its existing behavior and tests unchanged). Standing a third of the way
  * in from the open (stair) edge, facing the center, the same framing rule `roomViewFromSlot`
  * uses for a rect room's door wall.
+ *
+ * Exported (issue #259): a mission war room is a hex room too — `BuildingLayout.roomView`/
+ * `roomAt` use this same framing for one, rather than reimplementing it.
  */
-function hexRoomView(room: HexRoomGeometry): { bounds: THREE.Box3; standing: { position: THREE.Vector3; lookAt: THREE.Vector3 } } {
+export function hexRoomView(room: HexRoomGeometry, kind?: string): { bounds: THREE.Box3; standing: { position: THREE.Vector3; lookAt: THREE.Vector3 }; kind?: string } {
   const xs = room.corners.map((c) => c.x);
   const zs = room.corners.map((c) => c.z);
   const bounds = new THREE.Box3(
     new THREE.Vector3(Math.min(...xs), 0, Math.min(...zs)),
     new THREE.Vector3(Math.max(...xs), HEX_WALL_HEIGHT, Math.max(...zs)),
   );
-  const a = room.corners[room.openEdge];
-  const b = room.corners[(room.openEdge + 1) % 6];
+  // The room's first stair (the office has two — the hub-facing one stands in for "the door").
+  const openEdge = room.openEdges[0];
+  const a = room.corners[openEdge];
+  const b = room.corners[(openEdge + 1) % 6];
   const openMid = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
   const toward = new THREE.Vector3(room.center.x - openMid.x, 0, room.center.z - openMid.z).normalize();
   const position = new THREE.Vector3(openMid.x, 0, openMid.z).addScaledVector(toward, room.radius * 0.6);
   position.y = FIGURE_EYE_HEIGHT;
   const lookAt = position.clone().addScaledVector(toward, 4);
-  return { bounds, standing: { position, lookAt } };
+  return { bounds, standing: { position, lookAt }, ...(kind ? { kind } : {}) };
 }
 
 export interface BuiltHexOffice {
@@ -194,23 +205,31 @@ export interface BuiltHexOffice {
   layout: HexOfficeLayout;
   wallColliders: WallRect[];
   surfaceHeightAt(x: number, z: number): number | null;
+  /** Issue #260 (step 7a part a): the Hub's own fixed open-office stations — a spare desk
+   * (type `implementing`) per spot, and an idle spot near the kitchen/play corner, for
+   * `BuildingLayout.ts` to register once, same as the hex Library's own stations. */
+  hubDeskSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
+  hubIdleSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
   /** `#room=hub` / `#room=hex-office` (issue #242 review). Unknown names return null, the
    * same contract `BuildingLayout.roomView` already keeps for a rect room. */
-  roomView(name: string): { bounds: THREE.Box3; standing: { position: THREE.Vector3; lookAt: THREE.Vector3 } } | null;
+  roomView(name: string): { bounds: THREE.Box3; standing: { position: THREE.Vector3; lookAt: THREE.Vector3 }; kind?: string } | null;
   /** The hex room (if any) whose floor contains this world point (issue #249: a double-click
    * in isometric only ever checked the rect rooms, so clicking a hex room floor did nothing).
    * The same contract `BuildingLayout.roomAt` already keeps for a rect room. */
-  roomAt(x: number, z: number): { bounds: THREE.Box3; standing: { position: THREE.Vector3; lookAt: THREE.Vector3 } } | null;
+  roomAt(x: number, z: number): { bounds: THREE.Box3; standing: { position: THREE.Vector3; lookAt: THREE.Vector3 }; kind?: string } | null;
 }
 
 /** Builds the Hub and Office hex rooms and the walkway/stair between them, merged into one
  * static batch per shared material (4 draw calls total: walls, floors, walkway, Hub accents).
  * Pure placement comes from `buildHexOfficeLayout()` — deterministic, same every call. */
-export function buildHexOffice(): BuiltHexOffice {
-  const layout = buildHexOfficeLayout();
+export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
+  const layout = counts ? buildHexWorld(counts) : buildHexOfficeLayout();
   const group = new THREE.Group();
   group.name = 'hex-office';
 
+  // Issue #258 steps 5/6: every claimed room (`layout.rooms`), not just the 3 named ones —
+  // a component wing's war rooms share these same 3 zones, so a wing of any size still costs
+  // exactly these 3 draw calls, never one more per room (the render-budget note above).
   const wallMaterial = getToonMaterial(HEX_WALL_COLOR);
   const walls = new THREE.Group();
   walls.name = 'hex-walls';
@@ -218,23 +237,37 @@ export function buildHexOffice(): BuiltHexOffice {
   // walls stay full height in isometric overview and occlude the Hub furniture behind them —
   // the same `overviewLower: WALL_HEIGHT` every rect room's walls already carry.
   markStatic(walls, { zone: 'hex-walls', castShadow: false, overviewLower: HEX_WALL_HEIGHT });
-  for (const wall of [...buildHexWalls(layout.hub, wallMaterial), ...buildHexWalls(layout.office, wallMaterial)]) walls.add(wall);
+  for (const room of layout.rooms) {
+    for (const wall of buildHexWalls(room, wallMaterial)) walls.add(wall);
+  }
   group.add(walls);
 
   const floors = new THREE.Group();
   floors.name = 'hex-floors';
   markStatic(floors, { zone: 'hex-floors', castShadow: false });
-  floors.add(buildHexFloor(layout.hub, HEX_FLOOR_COLOR));
-  floors.add(buildHexFloor(layout.office, HEX_FLOOR_COLOR));
+  for (const room of layout.rooms) floors.add(buildHexFloor(room, HEX_FLOOR_COLOR));
   group.add(floors);
 
   const walkwayMaterial = getToonMaterial(WALKWAY_COLOR);
   const walkway = new THREE.Group();
   walkway.name = 'hex-walkway';
   markStatic(walkway, { zone: 'hex-walkway', castShadow: false });
-  walkway.add(orientedBox(v3(layout.hubRamp.from, 0), v3(layout.hubRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
-  walkway.add(orientedBox(v3(layout.officeRamp.from, 0), v3(layout.officeRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
-  walkway.add(orientedBox(v3(layout.hubRamp.to, WALKWAY_HEIGHT), v3(layout.officeRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
+  for (const connection of layout.connections) {
+    walkway.add(orientedBox(v3(connection.parentRamp.from, 0), v3(connection.parentRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
+    walkway.add(orientedBox(v3(connection.childRamp.from, 0), v3(connection.childRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
+    walkway.add(orientedBox(v3(connection.parentRamp.to, WALKWAY_HEIGHT), v3(connection.childRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
+  }
+  // Issue #260 (step 7a part b): the Hub's own short walkway out to the rect hall — up at the
+  // Hub's own open edge, flat across, down at the hall's own door. Shares this zone, so it costs
+  // nothing extra (the budget rule in issue #217: new hex geometry pays for itself).
+  const { hubRamp, deck: hallDeck, hallRamp } = layout.hallConnector;
+  walkway.add(orientedBox(v3(hubRamp.from, 0), v3(hubRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
+  // Issue #261 review: `deck` bends around the hall's own footprint (it is a polyline, not one
+  // straight segment) — one box per leg, still the same shared zone (no added draw call).
+  for (let i = 0; i < hallDeck.length - 1; i++) {
+    walkway.add(orientedBox(v3(hallDeck[i], WALKWAY_HEIGHT), v3(hallDeck[i + 1], WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
+  }
+  walkway.add(orientedBox(v3(hallRamp.from, WALKWAY_HEIGHT), v3(hallRamp.to, 0), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
   group.add(walkway);
 
   const accents = new THREE.Group();
@@ -242,16 +275,68 @@ export function buildHexOffice(): BuiltHexOffice {
   markStatic(accents, { zone: 'hex-accents', castShadow: false });
   const elevator = buildElevator();
   // Opposite the stair, against the Hub's own back wall, clear of the walkway opening.
-  const hubBack = layout.hub.corners[(layout.hub.openEdge + 3) % 6];
+  const hubBack = layout.hub.corners[(layout.hub.openEdges[0] + 3) % 6];
   elevator.position.set((layout.hub.center.x + hubBack.x) / 2, 0, (layout.hub.center.z + hubBack.z) / 2);
   elevator.lookAt(layout.hub.center.x, 0, layout.hub.center.z);
   accents.add(elevator);
   const kitchen = buildKitchenCorner();
-  const hubSide = layout.hub.corners[(layout.hub.openEdge + 2) % 6];
+  const hubSide = layout.hub.corners[(layout.hub.openEdges[0] + 2) % 6];
   kitchen.position.set((layout.hub.center.x + hubSide.x) / 2, 0, (layout.hub.center.z + hubSide.z) / 2);
   kitchen.lookAt(layout.hub.center.x, 0, layout.hub.center.z);
   accents.add(kitchen);
   group.add(accents);
+
+  // Issue #260 (step 7a part a): the Hub's own fixed open-office capacity — spare desks for a
+  // session with no mission, once the hall's own desks are full. One real furniture-library
+  // piece per desk (not a placeholder, unlike the elevator/kitchen accents above: a desk is
+  // where an agent visibly sits and works, so it needs to read as a desk up close), merged into
+  // its own zone — one draw call for however many spare desks the Hub carries.
+  const hubFurniture = hubFurnitureSpots(layout.hub);
+  const hubDesks = new THREE.Group();
+  hubDesks.name = 'hex-hub-desks';
+  markStatic(hubDesks, { zone: 'hex-hub-desks', castShadow: false });
+  const hubDeskSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }> = [];
+  for (const spot of hubFurniture.desks) {
+    const desk = createDesk(true);
+    desk.position.set(spot.position.x, 0, spot.position.z);
+    desk.lookAt(spot.lookAt.x, 0, spot.lookAt.z);
+    hubDesks.add(desk);
+    // `Desk.ts`'s monitor sits on the local -Z side (`Office.ts`'s own desk stations: the agent
+    // sits at `z + 0.7`, looking toward the monitor at `z - 0.15`); `lookAt` above turns -Z to
+    // face the Hub's own center, so +Z (the seated side) now faces away from it — the same
+    // "agent sits further out, facing in toward the monitor" shape every hall desk already has.
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(desk.quaternion);
+    hubDeskSpots.push({
+      position: desk.position.clone().addScaledVector(forward, 0.7),
+      lookAt: desk.position.clone().addScaledVector(forward, -0.15).setY(1.2),
+    });
+  }
+  group.add(hubDesks);
+
+  const hubIdleSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }> = hubFurniture.idle.map((spot) => ({
+    position: new THREE.Vector3(spot.position.x, 0, spot.position.z),
+    lookAt: new THREE.Vector3(spot.lookAt.x, 1.0, spot.lookAt.z),
+  }));
+
+  // Issue #258 review (the floor-library plugin's NPC/shelves went dark the moment the rect
+  // library room they keyed off, `room-N-library`, was deleted): an invisible, zero-geometry
+  // marker, found by name the same way that plugin already finds a rect room, carrying the
+  // hex library's own door-wall frame as plain data — no rect assumptions, no `RoomPlanner`
+  // import needed on the plugin's side.
+  const libraryMarker = new THREE.Object3D();
+  libraryMarker.name = 'hex-library-room';
+  libraryMarker.userData.libraryFrame = hexRoomFrame(layout.library, layout.library.openEdges[0]);
+  // A plain axis-aligned bounding rect of the hexagon, for the same "is the camera/cursor
+  // inside this room" checks `LabelDetail.ts`'s `DetailSign.rect` already does for a rect
+  // room — conservative (a touch larger than the hex itself at the corners), fine for that
+  // coarse a check.
+  const libraryXs = layout.library.corners.map((c) => c.x);
+  const libraryZs = layout.library.corners.map((c) => c.z);
+  libraryMarker.userData.libraryBounds = {
+    minX: Math.min(...libraryXs), maxX: Math.max(...libraryXs),
+    minZ: Math.min(...libraryZs), maxZ: Math.max(...libraryZs),
+  };
+  group.add(libraryMarker);
 
   // Issue #242 review (root cause of the "very dark" finding): the scene's only real light
   // sources are 3 fixed ceiling spotlights over the rect hall (`SceneSetup.ts`'s
@@ -275,16 +360,23 @@ export function buildHexOffice(): BuiltHexOffice {
     layout,
     wallColliders: hexWallColliders(layout),
     surfaceHeightAt: (x: number, z: number) => hexSurfaceHeightAt(layout, x, z),
+    hubDeskSpots,
+    hubIdleSpots,
     roomView: (name: string) => {
       const query = name.trim().toLowerCase();
       if (query === 'hub') return hexRoomView(layout.hub);
       if (query === 'hex-office') return hexRoomView(layout.office);
+      // Issue #258: `kind: 'library'` is load-bearing — `ViewController` already special-cases
+      // it (walking in or double-clicking it swaps to the library's own scene, issue #239)
+      // for whichever room carries it, rect or hex.
+      if (query === 'library') return hexRoomView(layout.library, 'library');
       return null;
     },
     roomAt: (x: number, z: number) => {
       const point = { x, z };
       if (pointInPolygon(point, layout.hub.corners)) return hexRoomView(layout.hub);
       if (pointInPolygon(point, layout.office.corners)) return hexRoomView(layout.office);
+      if (pointInPolygon(point, layout.library.corners)) return hexRoomView(layout.library, 'library');
       return null;
     },
   };

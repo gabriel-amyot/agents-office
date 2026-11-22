@@ -54,8 +54,9 @@ test('a figure built with no hair style (the default) has no hair group', () => 
   assert.equal(hair, undefined);
 });
 
-test('each of the 3 non-"none" hair styles attaches one "hero-hair" group under the head, each its own shared shape', () => {
-  for (const style of ['tufts', 'spiky', 'bun'] as const) {
+test('each of the 2 non-"none" hair styles attaches one "hero-hair" group under the head, each its own shared shape', () => {
+  // Issue #215: 'bun' removed (the dome read as the "cap" shape Gabriel disliked).
+  for (const style of ['tufts', 'spiky'] as const) {
     const joints = buildSkeleton(RED, undefined, style);
     const hair = joints.head.children.find((child) => child.name === 'hero-hair');
     assert.ok(hair, `expected a hair group for style ${style}`);
@@ -104,6 +105,31 @@ test('hairStyleFor and bodyScaleFor are deterministic for one name, and vary acr
     const scale = bodyScaleFor(name);
     assert.ok(scale >= 0.9 && scale <= 1.1, `body scale ${scale} for ${name} outside the expected narrow range`);
   }
+});
+
+// --- Issue #215 (party round 7, unanimous): bun removed ---
+
+test('issue #215: hairStyleFor never returns bun, for any name', () => {
+  for (let i = 0; i < 200; i++) {
+    const style = hairStyleFor(`fuzz-${i}`);
+    assert.notEqual(style, 'bun');
+    assert.ok(['tufts', 'spiky', 'none'].includes(style), `unexpected style ${style}`);
+  }
+});
+
+test('issue #215: a name that used to hash to bun now gets the table\'s next entry (none), every other name\'s own seeded style is untouched', () => {
+  // Computed against the pre-#215 4-slot table (['tufts', 'spiky', 'bun', 'none']): 'f3' and
+  // 'agent-4' used to land on 'bun'; the rest are fixed points this change must never move.
+  assert.equal(hairStyleFor('f3'), 'none', 'the bun slot\'s own next neighbor in the table');
+  assert.equal(hairStyleFor('agent-4'), 'none');
+  assert.equal(hairStyleFor('amelia'), 'tufts', 'unchanged');
+  assert.equal(hairStyleFor('f0'), 'tufts', 'unchanged');
+  assert.equal(hairStyleFor('f1'), 'spiky', 'unchanged');
+  assert.equal(hairStyleFor('f2'), 'spiky', 'unchanged');
+  assert.equal(hairStyleFor('f4'), 'none', 'unchanged');
+  assert.equal(hairStyleFor('f6'), 'tufts', 'unchanged');
+  assert.equal(hairStyleFor('agent-1'), 'tufts', 'unchanged');
+  assert.equal(hairStyleFor('agent-2'), 'spiky', 'unchanged');
 });
 
 test('body width is a root scale (x and z only); FIGURE_EYE_HEIGHT stays true for every figure regardless of its width', () => {

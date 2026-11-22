@@ -12,7 +12,11 @@ import type { RoomKind } from './rooms.js';
  * a plan into objects. No geometry is built here.
  */
 
-/** A piece in a room. `turn` is added to the rotation that faces the door: 0 faces the door, PI faces away. */
+/** A piece in a room. `turn` is added to the rotation that faces the door: 0 faces the door, PI faces away.
+ * `edge` (issue #259 review round 2): a hex war room's own edge offset from its open (door)
+ * edge — `missionRooms.ts` resolves `(openEdge + edge) % 6` against the real room and builds a
+ * `HexFrame` for that edge instead of the room's own door frame. Undefined (every rect room's
+ * own plan, `roomFurnishing`) keeps using the room's one door frame, unchanged. */
 export interface Placement {
   piece: PieceSpec;
   a: number;
@@ -20,6 +24,7 @@ export interface Placement {
   /** Height for a piece that hangs on a wall. */
   y?: number;
   turn?: number;
+  edge?: number;
 }
 
 export interface SpotPlan {
@@ -29,6 +34,8 @@ export interface SpotPlan {
   /** The point the agent looks at: a, d and height. */
   look: [number, number, number];
   posture?: Posture;
+  /** See `Placement.edge`. */
+  edge?: number;
 }
 
 export interface SignPlan {
@@ -59,8 +66,6 @@ export const QUEUE_SPOT_RADIUS = 0.35;
 const FACE_PLUS_A = Math.PI / 2;
 const FACE_MINUS_A = -Math.PI / 2;
 const FACE_AWAY = Math.PI;
-
-const rows = (count: number, spacing: number) => Array.from({ length: count }, (_, i) => (i - (count - 1) / 2) * spacing);
 
 export const OFFICE_DESK = { a: 0, d: ROOM_SIZE - 2.2 } as const;
 
@@ -138,47 +143,6 @@ function furnishOffice({ doorAlong, usersOffice = true }: RoomShape): RoomPlan {
   return { pieces, spots: queueSpots(), signs };
 }
 
-/** A lounge: three sofas facing the door, a coffee machine and many plants, tall and small. */
-function furnishLounge(): RoomPlan {
-  const pieces: Placement[] = [{ piece: PIECES.coffeeMachine(), a: -5.2, d: ROOM_SIZE - 0.8 }];
-  const spots: SpotPlan[] = [];
-  for (const a of rows(3, 3.6)) {
-    // A sofa faces the door; its back is toward the far wall
-    pieces.push({ piece: PIECES.sofa(0x6a5acd), a, d: 7.5 });
-    for (const offset of [-0.6, 0, 0.6]) {
-      spots.push({ type: 'idle', a: a + offset, d: 7.45, look: [a + offset, 6.4, 0.8], posture: 'seated' });
-    }
-  }
-  pieces.push(
-    // Between the sofas and at both ends
-    { piece: PIECES.plant(), a: -1.8, d: 7.6 },
-    { piece: PIECES.plant(), a: 1.8, d: 7.6 },
-    { piece: PIECES.tallPlant(), a: -5.4, d: 7.5 },
-    { piece: PIECES.tallPlant(), a: 5.4, d: 7.5 },
-    // Along the far wall, clear of the gap an outer room's door may need
-    { piece: PIECES.plant(), a: -3.9, d: 11.5 },
-    { piece: PIECES.plant(), a: -2.2, d: 11.6 },
-    { piece: PIECES.plant(), a: 2.2, d: 11.6 },
-    { piece: PIECES.tallPlant(), a: 5.4, d: 11.4 },
-    // The front corners, away from the door
-    { piece: PIECES.tallPlant(), a: -5.4, d: 0.6 },
-    { piece: PIECES.tallPlant(), a: 5.4, d: 0.6 },
-  );
-  return { pieces, spots, signs: [] };
-}
-
-function furnishDesks(): RoomPlan {
-  const pieces: Placement[] = [];
-  const spots: SpotPlan[] = [];
-  for (const d of [4, 8]) {
-    for (const a of rows(4, 2.8)) {
-      pieces.push({ piece: PIECES.desk(), a, d });
-      spots.push({ type: 'implementing', a, d: d - 0.7, look: [a, d + 0.15, 1.2] });
-    }
-  }
-  return { pieces, spots, signs: [] };
-}
-
 /**
  * Shelves on the far wall and on both side walls: the knowledge base of the office. White,
  * not the ordinary bookshelf brown (issue #128 AC4): an agent should never mistake library
@@ -204,22 +168,9 @@ function furnishLibrary(): RoomPlan {
   return { pieces, spots, signs: [] };
 }
 
-function furnishLab(): RoomPlan {
-  const pieces: Placement[] = [];
-  const spots: SpotPlan[] = [];
-  for (const a of rows(4, 2.8)) {
-    pieces.push({ piece: PIECES.testStation(), a, d: 7 });
-    spots.push({ type: 'testing', a, d: 6.2, look: [a, 7, 1.4] });
-  }
-  return { pieces, spots, signs: [] };
-}
-
 const FURNISH: Record<RoomKind, (shape: RoomShape) => RoomPlan> = {
   office: furnishOffice,
-  desks: furnishDesks,
   library: furnishLibrary,
-  lab: furnishLab,
-  lounge: furnishLounge,
 };
 
 /** The furnishing plan of a room kind. */

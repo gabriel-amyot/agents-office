@@ -30,11 +30,16 @@ function seededRandom(seed: number): () => number {
 }
 
 /**
- * Gabriel's real size: the hall, 16 building rooms, 9 mission rooms (one locked)
+ * Gabriel's real size: the hall, the hex Hub/Office/Library, 9 mission rooms (one locked)
  * and 40 agents. Half of the agents wear BMAD hats (one to four) and a quarter
  * wear GitHub cards (one to five), as with the fork plugins on.
+ *
+ * `buildingRooms` is documentation only, not read by this fixture (issue #260, step 7a): before
+ * the rented 'desks'/'lab'/'lounge' kinds retired, 40 agents' own overflow used to rent up to
+ * 16 extra rect rooms; now that overflow absorbs into the hex Hub's own fixed desks and
+ * kitchen/play corner instead, the rect building itself never grows past its one office room.
  */
-export const REAL_SIZE = { buildingRooms: 16, missionRooms: 9, agents: 40, hatWearers: 20, cardHolders: 10 } as const;
+export const REAL_SIZE = { buildingRooms: 1, missionRooms: 9, agents: 40, hatWearers: 20, cardHolders: 10 } as const;
 
 // 'librarian' included (issue #128 review): the budget fixture must wear every hat it pins.
 const PERSONAS = ['dev', 'architect', 'qa', 'pm', 'analyst', 'sm', 'debugger', 'spec-coach', 'data-engineer', 'ux-designer', 'tech-writer', 'librarian'];
