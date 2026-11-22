@@ -95,10 +95,11 @@ function orientedBox(from: THREE.Vector3, to: THREE.Vector3, crossA: number, cro
  * floor's world bounds into the isometric camera's default pan/zoom limits. Step 2 deliberately
  * left this untagged while `HEX_OFFSET` sat 360 units from the rect building — it zoomed the
  * default view out far enough to drop "Your office"'s label under the 22 px readability floor
- * (`tests/wayfinding.test.ts`). Now that the hex structure sits just outside the rect hall
- * (`HEX_OFFSET`, step 7a part b), the default isometric overview should show the whole
- * building, rect lobby and hex wings together, not just one or the other; the real-size
- * label-readability test is what actually proves the margin still holds. */
+ * (`tests/wayfinding.test.ts`). Issue #260 step 7b item 5: the rect hall is gone from the
+ * 'building' layout entirely now, and `HEX_OFFSET` centers the hex building at the origin — the
+ * default isometric overview frames the whole hex building alone (Hub, Office, Library, every
+ * wing), nothing else left to show; the real-size label-readability test is what actually
+ * proves the margin still holds. */
 function buildHexFloor(room: HexRoomGeometry, color: number): THREE.Mesh {
   const positions: number[] = [];
   for (let i = 0; i < 6; i++) {
@@ -341,17 +342,6 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     walkway.add(orientedBox(v3(connection.childRamp.from, 0), v3(connection.childRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
     walkway.add(orientedBox(v3(connection.parentRamp.to, WALKWAY_HEIGHT), v3(connection.childRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
   }
-  // Issue #260 (step 7a part b): the Hub's own short walkway out to the rect hall — up at the
-  // Hub's own open edge, flat across, down at the hall's own door. Shares this zone, so it costs
-  // nothing extra (the budget rule in issue #217: new hex geometry pays for itself).
-  const { hubRamp, deck: hallDeck, hallRamp } = layout.hallConnector;
-  walkway.add(orientedBox(v3(hubRamp.from, 0), v3(hubRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
-  // Issue #261 review: `deck` bends around the hall's own footprint (it is a polyline, not one
-  // straight segment) — one box per leg, still the same shared zone (no added draw call).
-  for (let i = 0; i < hallDeck.length - 1; i++) {
-    walkway.add(orientedBox(v3(hallDeck[i], WALKWAY_HEIGHT), v3(hallDeck[i + 1], WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
-  }
-  walkway.add(orientedBox(v3(hallRamp.from, WALKWAY_HEIGHT), v3(hallRamp.to, 0), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
   group.add(walkway);
 
   const accents = new THREE.Group();
