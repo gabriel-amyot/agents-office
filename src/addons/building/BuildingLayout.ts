@@ -23,7 +23,7 @@ import { FIGURE_EYE_HEIGHT } from '../../characters/StickFigureParts.js';
 import { createMissionsBoard, placeMissionsBoard, type MissionBoardEntry } from './missionsBoard.js';
 import { buildHexOffice, hexRoomView, type BuiltHexOffice } from './HexRooms.js';
 import { hubOverflowIdleSpot, libraryOverflowResearchingSpot, pointInPolygon, type ComponentRole, type HexWorldCounts } from './HexRoomPlanner.js';
-import { componentForRepo } from './componentWing.js';
+import { componentForWing } from './componentWing.js';
 
 /**
  * Work that happens at the agent's own desk. Everything else is a trip. Planning,
@@ -182,7 +182,8 @@ export class BuildingLayout implements LayoutStrategy {
    * `rebuildHexOffice` passes this straight to `buildHexWorld`. The Library stays fixed at 1
    * (its own document-driven growth is a separate, later design, out of this step's scope);
    * the 4 component wings grow one room at a time as `syncWorldRooms` discovers a new mission,
-   * `componentForRepo` deciding which wing. */
+   * `componentForWing` deciding which wing (issue #261 review round 3: a mission's own
+   * `component` field first, `componentForRepo` the fallback). */
   private missionWingCounts: HexWorldCounts = { library: 1, portal: 0, agents: 0, tooling: 0, infra: 0 };
   private now: () => number;
   private wallClock: () => number;
@@ -344,7 +345,7 @@ export class BuildingLayout implements LayoutStrategy {
       const wingOf = new Map<string, ComponentRole>();
       const ordinalOf = new Map<string, number>();
       for (const room of newRooms) {
-        const wing = componentForRepo(room.repo);
+        const wing = componentForWing(room);
         wingOf.set(room.id, wing);
         this.missionWingCounts = { ...this.missionWingCounts, [wing]: this.missionWingCounts[wing] + 1 };
         ordinalOf.set(room.id, this.missionWingCounts[wing] - 1);

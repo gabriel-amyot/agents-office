@@ -36,3 +36,21 @@ export function componentForRepo(repo: string | undefined): ComponentRole {
   if (/agent|proxi(?![a-z])|hermes/.test(name)) return 'agents';
   return 'tooling';
 }
+
+const COMPONENT_ROLES: ReadonlySet<string> = new Set(['portal', 'agents', 'tooling', 'infra']);
+
+/**
+ * Which hex wing a mission room belongs in (issue #261 review round 3). `repo` cannot carry
+ * this signal for a mission whose files live in a `project-management` repo — every Klever
+ * mission here does, since a mission's own `repo` field names the knowledge-base repo the
+ * mission record lives in, not the product repo the mission is actually about (8 of 9 real
+ * missions on this floor today hash to `componentForRepo`'s own `tooling` catch-all this way).
+ * A mission's own `component` field (`mission.yaml`'s optional `component:`, read by
+ * `plugins/missions/index.ts`, re-checked against the closed set on the server and again here)
+ * is the mission author's own direct say, checked first; `componentForRepo(repo)`'s own
+ * keyword guess is the fallback for every mission that has not set one.
+ */
+export function componentForWing(room: { repo?: string; component?: string }): ComponentRole {
+  if (room.component && COMPONENT_ROLES.has(room.component)) return room.component as ComponentRole;
+  return componentForRepo(room.repo);
+}

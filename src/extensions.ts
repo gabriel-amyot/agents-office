@@ -32,6 +32,14 @@ export interface WorldRoom {
    * exact floor-name equality. Absent only when no repo could be resolved; such a room shows
    * on `ALL_FLOORS` only. */
   repo?: string;
+  /** Issue #261 review round 3: a mission's own `mission.yaml` may name its hex wing directly
+   * (`component: tooling | portal | agents | infra`), read first, ahead of
+   * `componentForRepo(repo)`'s own keyword guess — repo-name matching cannot carry the real
+   * signal for a mission whose files live in a `project-management` repo (every Klever mission
+   * does), not the product repo it is actually about. Whitelisted to the 4 wing names the
+   * server already knows (`server/seam.ts`'s own projection), same defense-in-depth every other
+   * closed-set field here already gets; absent or unrecognized falls through to the repo guess. */
+  component?: 'tooling' | 'portal' | 'agents' | 'infra';
   walls: {
     statement?: string;
     docs?: string[];

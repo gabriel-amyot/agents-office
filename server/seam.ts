@@ -131,6 +131,12 @@ export interface RoomInput {
    * org-qualified while this tag never is. Absent only when no repo could be resolved at all;
    * such a room shows on `ALL_FLOORS` only, never guessed onto one specific floor. */
   repo?: string;
+  /** Issue #261 review round 3: a mission's own `mission.yaml` may name its hex wing directly
+   * (`plugins/missions/index.ts`'s own `MissionSummary.component`), ahead of the client's own
+   * repo-keyword guess. Free text from a YAML file until `projectWorld` below re-checks it
+   * against the closed set, the same defense-in-depth every other plugin-sourced field here
+   * already gets. */
+  component?: string;
   walls?: {
     statement?: string;
     docs?: string[];
@@ -338,6 +344,11 @@ export async function describeWorld(providers: WorldProvider[], observations: Ob
 
 const ACTIVITIES = new Set(['idle', 'planning', 'implementing', 'researching', 'testing', 'debugging',
   'reviewing', 'writing_docs', 'deploying', 'meeting']);
+/** Issue #261 review round 3: the 4 hex wing names a mission's own `mission.yaml` may claim
+ * directly (`RoomInput.component`), the same closed set `src/addons/building/HexPlanner.ts`'s
+ * `ComponentRole` type carries on the client — re-checked here, never trusted from the plugin
+ * layer as-is (free text out of a YAML file until this). */
+const WING_COMPONENTS = new Set(['tooling', 'portal', 'agents', 'infra']);
 const BADGE = /^[a-z0-9-]{1,32}$/;
 /** A skill name (issue #166): same token shape `plugins/peek` already validates skill names against, a plugin's own namespace prefix (`crit:crit-cli`) included. */
 const SKILL = /^[A-Za-z0-9:_.-]{1,64}$/;
@@ -721,6 +732,7 @@ export function projectWorld(parts: WorldInput[], pluginNames: string[], publicI
         return [{ id: publicId(`sleeper:${room.key}:${rawId}`), ...(endedAt ? { endedAt } : {}), ...(name ? { name } : {}), ...(story ? { story } : {}) }];
       });
     const repo = repoTag(room.repo);
+    const component = WING_COMPONENTS.has(String(room.component)) ? room.component as 'tooling' | 'portal' | 'agents' | 'infra' : undefined;
     return {
       id: publicId(`room:${room.key}`),
       kind: room.kind === 'workspace' ? 'workspace' : 'mission',
@@ -730,6 +742,7 @@ export function projectWorld(parts: WorldInput[], pluginNames: string[], publicI
       ...(isoTimestamp(room.createdAt) ? { createdAt: isoTimestamp(room.createdAt) } : {}),
       ...(isoTimestamp(room.closedAt) ? { closedAt: isoTimestamp(room.closedAt) } : {}),
       ...(repo ? { repo } : {}),
+      ...(component ? { component } : {}),
       walls: {
         ...(walls.statement ? { statement: displayText(walls.statement, 240) } : {}),
         ...(Array.isArray(walls.docs) ? { docs: walls.docs.slice(0, 8).map((doc) => displayText(doc, 60)) } : {}),

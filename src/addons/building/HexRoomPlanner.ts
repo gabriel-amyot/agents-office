@@ -67,7 +67,7 @@ const HALL_CONNECTOR_DOOR: HexPoint = { x: (HALL.minX + HALL.maxX) / 2, z: HALL.
  * `buildRealSizeOffice()` comment already says the rect building never grows past its one office
  * room at all at today's traffic.
  */
-export const HEX_OFFSET: HexPoint = { x: -34.8, z: 60.7 };
+export const HEX_OFFSET: HexPoint = { x: -28.6, z: 49.9 };
 /**
  * Every hex room's own floor/wall circumradius — the Hub, the Office, the Library and every war
  * room, all ONE size (issue #261 review round 2: "mixed radii cannot share one lattice edge to
@@ -85,12 +85,18 @@ export const ROOM_RADIUS = 9;
  * "about 2" units) — see `LATTICE_SPACING`. */
 export const BRIDGE_GAP = 2;
 /**
- * Distance between neighboring lattice cell centers. Issue #261 review round 2: every room
- * shares one `ROOM_RADIUS` now, so this is derived once, honestly, for true edge-to-edge
- * tangency (`sqrt(3) * ROOM_RADIUS`, the exact flat-top-hex center distance at which two
- * same-size hexes touch with zero gap) plus `BRIDGE_GAP` — not picked to clear a pairwise-sum
- * check the way the mixed-radius version needed. */
-export const LATTICE_SPACING = Math.sqrt(3) * ROOM_RADIUS + BRIDGE_GAP;
+ * The `size` argument `hexPixel`/`worldCenter` scale every cell's own axial coordinate by — NOT
+ * the real-world distance between two neighboring cell centers (issue #261 review round 3: the
+ * first uniform-radius pass confused the two, leaving gaps about `sqrt(3)` times bigger than
+ * intended — roughly 12-13 units instead of 2). `hexPixel`'s own formula
+ * (`x = size * sqrt(3) * (q + r/2)`, `z = size * 1.5 * r`) puts every one of the 6 neighbor
+ * directions at a real center-to-center distance of `size * sqrt(3)` (checked directly: cell
+ * `(1,0)` and cell `(0,1)` both land exactly `size * sqrt(3)` from the origin). True
+ * edge-to-edge tangency between two same-size hexes needs that real distance to equal
+ * `sqrt(3) * ROOM_RADIUS` (zero gap) plus `BRIDGE_GAP` — so this constant (the `size` argument,
+ * not the distance itself) is `ROOM_RADIUS + BRIDGE_GAP / sqrt(3)`, which `* sqrt(3)` back out
+ * gives exactly that real distance. */
+export const LATTICE_SPACING = ROOM_RADIUS + BRIDGE_GAP / Math.sqrt(3);
 /** The Hub's own radius — issue #261 review round 2: no longer a bigger hex (the old `HALL`'s
  * role still, just sized like every other room now, so it tangents its own ring-1 neighbors
  * the same way they tangent each other). */
