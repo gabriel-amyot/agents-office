@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   buildHexOfficeLayout,
+  cribStandSpots,
+  CRIB_STAND_COUNT,
   hexSurfaceHeightAt,
   hexWallColliders,
   hubFurnitureSpots,
   hubOverflowIdleSpot,
+  hubToolCribSpot,
   libraryOverflowResearchingSpot,
   pointInPolygon,
   WALKWAY_HEIGHT,
@@ -153,4 +156,24 @@ test('a Library overflow research spot never lands close enough to double up on 
     seen.add(key);
     cursor = nextIndex;
   }
+});
+
+test('cribStandSpots (issue #227): a fixed ring of CRIB_STAND_COUNT points, each the same distance from the crib counter, no two agents sharing a point', () => {
+  const layout = buildHexOfficeLayout();
+  const crib = hubToolCribSpot(layout.hub);
+  const spots = cribStandSpots(layout.hub);
+  assert.equal(spots.length, CRIB_STAND_COUNT);
+  const radii = spots.map((spot) => Math.hypot(spot.x - crib.x, spot.z - crib.z));
+  for (const radius of radii) assert.ok(Math.abs(radius - radii[0]) < 1e-9, 'every stand spot sits the same distance from the crib');
+  const seen = new Set<string>();
+  for (const spot of spots) {
+    const key = `${spot.x.toFixed(6)},${spot.z.toFixed(6)}`;
+    assert.ok(!seen.has(key), `duplicate crib stand spot: ${key}`);
+    seen.add(key);
+  }
+});
+
+test('cribStandSpots is deterministic', () => {
+  const layout = buildHexOfficeLayout();
+  assert.deepEqual(cribStandSpots(layout.hub), cribStandSpots(layout.hub));
 });

@@ -1,5 +1,6 @@
 import type { ManagedAgent } from './agents/AgentManager.js';
 import type { PickTarget } from './scene/Selection.js';
+import type { LayoutStrategy } from './layout/LayoutStrategy.js';
 import type * as THREE from 'three';
 
 /** A session's story (issue #160): the tombstone card's data, read from the session's own
@@ -115,7 +116,10 @@ export interface OfficeExtension {
   id: string;
   plugin?: string;
   start?(scene: THREE.Scene): void;
-  agentsChanged?(agents: ManagedAgent[]): void;
+  /** `layout` (issue #227) is the active layout's own crib/room geometry, for an extension that
+   * needs to walk a figure somewhere before it changes what the figure shows — optional, so an
+   * extension that only reads agent state (every other one so far) ignores the second argument. */
+  agentsChanged?(agents: ManagedAgent[], layout?: LayoutStrategy): void;
   worldChanged?(world: World): void;
   update?(elapsed: number, delta: number): void;
   /** Extra things a click or hover can pick, besides an agent (for example a tombstone). */

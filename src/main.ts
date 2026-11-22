@@ -314,7 +314,7 @@ function buildUI(): void {
   view.sceneChanged();
   labelDetail.sceneChanged();
   labelDetail.refresh();
-  for (const extension of activeExtensions(scene)) extension.agentsChanged?.(agentManager.getAgents());
+  for (const extension of activeExtensions(scene)) extension.agentsChanged?.(agentManager.getAgents(), layout);
   frameLoop.sceneChanged();
 }
 

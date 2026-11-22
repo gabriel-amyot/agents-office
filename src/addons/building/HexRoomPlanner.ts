@@ -592,3 +592,28 @@ export function hubToolCribSpot(hub: HexRoomGeometry): HexPoint {
   const mid = edgeMidpoint(hub.center, hub.radius, edgeIndex);
   return { x: (hub.center.x + mid.x) / 2, z: (hub.center.z + mid.z) / 2 };
 }
+
+/** How many agents the crib's own standing ring seats at once (issue #227 AC3: 5 concurrent,
+ * one spare so a 6th arriving the same instant still gets its own point rather than sharing). */
+export const CRIB_STAND_COUNT = 6;
+/** Close enough to read as a small queue at the counter, far enough that two standing figures
+ * never visually overlap — the same clearance order of magnitude `HUB_OVERFLOW_PACKING` already
+ * uses for the Hub's own idle crowd. */
+const CRIB_STAND_RADIUS = 1.1;
+
+/**
+ * The tool crib's own standing spots (issue #227): a small fixed ring around the counter
+ * (`hubToolCribSpot`), each one looking at it. Fixed, not a growing spiral like
+ * `hubOverflowIdleSpot` — the crib never grows, so a constant-size ring is enough. The caller
+ * (`plugins/skills`'s equipment extension) claims and releases spots by index itself; this only
+ * hands back the geometry.
+ */
+export function cribStandSpots(hub: HexRoomGeometry): HexPoint[] {
+  const crib = hubToolCribSpot(hub);
+  const spots: HexPoint[] = [];
+  for (let i = 0; i < CRIB_STAND_COUNT; i++) {
+    const angle = (i / CRIB_STAND_COUNT) * Math.PI * 2;
+    spots.push({ x: crib.x + CRIB_STAND_RADIUS * Math.cos(angle), z: crib.z + CRIB_STAND_RADIUS * Math.sin(angle) });
+  }
+  return spots;
+}
