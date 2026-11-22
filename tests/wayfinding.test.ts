@@ -41,7 +41,12 @@ const center = (rect: Rect) => ({ x: (rect.minX + rect.maxX) / 2, z: (rect.minZ 
 function building() {
   const scene = new THREE.Scene();
   const storage = new Map<string, string>();
-  const layout = new BuildingLayout(scene, createOffice(scene), {
+  // Issue #260 step 7b item 6: `createOffice` (the rect hall) never ran in production for the
+  // 'building' layout (`main.ts`'s own `layoutId === 'activity' ? createOffice(scene) : new
+  // Map()`, step 4) — an empty `Map` matches it; `BuildingLayout`'s own constructor builds the
+  // hex structure regardless. The 'activity' layout's own `createOffice` behavior is still
+  // exercised directly below ("the activity layout scene does not change in the overview").
+  const layout = new BuildingLayout(scene, new Map(), {
     now: () => 0,
     storage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => void storage.set(k, v) },
   });

@@ -207,12 +207,19 @@ test('with 5 issue cards on each of the 40 agents the frame stays under the draw
   // that used to hash to it — this fixture's 40 seeded names included at least one that used
   // to land on 'bun', so `hair:bun-base`/`hair:bun-knot` are never built for it now, freeing
   // both of that style's own shared buckets. Applied on top of 409, landing it at 407, not a
-  // hand-picked 2 off. New pin: 410, 3 points of headroom left against the 430 cap — not free
-  // money: the budget rule from issue #217 is that every later step which adds hex geometry
-  // pays for itself by deleting the rect-building code it replaces in the same PR (step 4
-  // deletes the rect library's room path, step 5 deletes the mission corridor), so this never
-  // needs a cap raise before step 7 deletes the legacy rect system outright.
-  assert.ok(after.total <= 410, `worst case ${after.total} exceeds the pinned baseline (407, issue #215) + 3`);
+  // hand-picked 2 off. Pin was 410, 3 points of headroom left against the 430 cap.
+  //
+  // Issue #260 step 7b item 6 (step 7 itself: "deletes the legacy rect system outright", the
+  // promise every comment above kept pointing at): `tests/real-size-office.ts`'s own fixture no
+  // longer calls `createOffice` at all — it never ran in production for the 'building' layout to
+  // begin with (`main.ts`'s own `layoutId === 'activity' ? createOffice(scene) : new Map()`,
+  // step 4), so this fixture now measures the real thing: the hex structure alone, nothing left
+  // over from the rect hall it used to carry for no in-production reason. Net measured: -216
+  // (the rect hall's own floor, walls, desks, whiteboards, kitchen, sofas, printer, water
+  // cooler, foosball/air-hockey/arcade and their stations, none of which the 'building' layout
+  // ever drew in the browser), landing at 191. New pin: 195, a small, honest margin above the
+  // measured worst case — not the stale 410 a since-deleted rect hall used to fill most of.
+  assert.ok(after.total <= 195, `worst case ${after.total} exceeds the pinned baseline (191, issue #260 step 7b item 6) + 4`);
 });
 
 test('the worst case measures the same total every run: the fixture\'s one random draw is seeded (issue #128 review round 2)', () => {
@@ -302,7 +309,16 @@ test('the worst case measures the same total every run: the fixture\'s one rando
   // `hex-accents` zone is budget-neutral: it drops the same 2 merged calls (its own counter and
   // tool materials) from the hall zone that it adds to the Hub's, re-measured, not assumed. Net
   // measured: +6, landing at 364.
-  assert.deepEqual([...totals], [364], `expected every one of 8 runs to measure 364, got ${[...totals]}`);
+  //
+  // Issue #260 step 7b item 6: this fixture (`tests/real-size-office.ts`) stops calling
+  // `createOffice` — the rect hall it built was never reachable in production for the
+  // 'building' layout anyway (step 4's `main.ts` change), so this was dead weight the fixture
+  // carried only because nobody had ported it yet. Net measured: -173 (the whole rect hall:
+  // floor, walls, decorations, whiteboards, desks, coffee machine, test stations, sofas,
+  // printer, water cooler, kitchen, foosball/air-hockey/arcade), landing at 191, still exactly
+  // one value across all 8 runs for the same reason as before — nothing about removing a static,
+  // always-identical rect hall introduces any new randomness.
+  assert.deepEqual([...totals], [191], `expected every one of 8 runs to measure 191, got ${[...totals]}`);
 });
 
 test('the merge keeps every visible furniture triangle: merged vertices equal the source vertices', () => {
@@ -314,7 +330,11 @@ test('the merge keeps every visible furniture triangle: merged vertices equal th
   scene.traverse((object) => {
     if ((object as THREE.Mesh).isMesh && object.layers.isEnabled(STATIC_SOURCE_LAYER)) sources.push(object as THREE.Mesh);
   });
-  assert.ok(sources.length > 2000, `${sources.length} merged sources`);
+  // Issue #260 step 7b item 6: with the rect hall gone from this fixture (see the draw-call
+  // tests above), the true source-mesh count dropped from "> 2000" to a measured 1640 — still
+  // plenty to prove the merge is doing real work, honest headroom above the measured count, not
+  // the old bound a since-deleted rect hall used to clear easily.
+  assert.ok(sources.length > 1500, `${sources.length} merged sources`);
   assert.equal(vertexCount(statics.mergedMeshes), vertexCount(sources));
   const sourceMaterials = new Set(sources.map((mesh) => mesh.material));
   for (const mesh of statics.mergedMeshes) assert.ok(sourceMaterials.has(mesh.material), 'a merged mesh uses a source material');

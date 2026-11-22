@@ -14,7 +14,6 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => new Proxy({}, {
   get: () => () => undefined,
   set: () => true,
 })) as never;
-const { createOffice } = await import('../src/scene/Office.js');
 const { BuildingLayout, BUILDING_STORAGE_KEY, floorStorageKey, dropLegacyRoomStorage, ROOMS_DROPPED_KEY } = await import('../src/addons/building/BuildingLayout.js');
 const { testHexWarRoom, combinedBoard } = await import('../src/addons/building/missionRooms.js');
 const { projectWorld } = await import('../server/seam.js');
@@ -70,7 +69,11 @@ function setup(storage = new Map<string, string>(), floor?: string) {
   let clock = 0;
   let wallClock = Date.parse('2026-11-20T00:00:00Z');
   const scene = new THREE.Scene();
-  const layout = new BuildingLayout(scene, createOffice(scene), {
+  // Issue #260 step 7b item 6: `createOffice` (the rect hall) never ran in production for the
+  // 'building' layout (`main.ts`'s own `layoutId === 'activity' ? createOffice(scene) : new
+  // Map()`, step 4) — an empty `Map` matches it; `BuildingLayout`'s own constructor builds the
+  // hex structure regardless.
+  const layout = new BuildingLayout(scene, new Map(), {
     now: () => clock,
     wallClock: () => wallClock,
     dwellMs: 4000,
@@ -113,7 +116,7 @@ test('an agent keeps its home desk, makes a trip after the dwell time, and comes
   assert.equal(layout.seatFor(agent('a', 'testing'), 'implementing'), null, 'no move before the dwell time');
   assert.deepEqual(tick(3000).filter((m) => m.agentId === 'a'), []);
   const trip = tick(1500).find((m) => m.agentId === 'a')!;
-  assert.match(trip.seat.key, /^test_/);
+  assert.match(trip.seat.key, /^hex-hub-test-/);
 
   layout.seatFor(agent('a', 'debugging'), 'testing');
   const back = tick(4500).find((m) => m.agentId === 'a')!;
@@ -252,18 +255,18 @@ test('idle agents beyond the hall seats overflow onto the hex hub\'s own idle sp
   assert.ok(seats.some((seat) => seat.key.startsWith('hex-hub-idle-')), 'the overflow idle spots are the hub\'s own');
 });
 
-// Issue #260 step 7b item 4: the hex Hub now carries its own 2 fixed test stations (the hall's
-// own 2 test stations had no hex home at all until now) — 4 testing agents all get a real test
-// station, hall or hub, none falling back to the idle corner.
-test('testing fills the hall\'s 2 test stations, then the hub\'s own 2, before any overflow (issue #260 step 7b item 4)', () => {
+// Issue #260 step 7b item 4: the hex Hub carries its own 2 fixed test stations (the rect
+// hall's own 2 test stations had no hex home at all until then; step 7b item 6: the rect hall
+// itself is gone now, so the hub's own 2 are the only fixed test stations left) — both testing
+// agents get a real test station, neither falling back to the idle corner.
+test('testing fills the hub\'s 2 fixed test stations before any overflow (issue #260 step 7b item 4)', () => {
   const { layout, agent } = setup();
-  const seats = Array.from({ length: 4 }, (_, i) => layout.seatFor(agent(`t${i}`, 'testing'), null)!);
-  assert.equal(new Set(seats.map((s) => s.key)).size, 4);
-  assert.ok(seats.some((seat) => seat.key.startsWith('test_')), 'some testers sit at the hall\'s own stations');
-  assert.ok(seats.some((seat) => seat.key.startsWith('hex-hub-test-')), 'some testers sit at the hub\'s own stations');
+  const seats = Array.from({ length: 2 }, (_, i) => layout.seatFor(agent(`t${i}`, 'testing'), null)!);
+  assert.equal(new Set(seats.map((s) => s.key)).size, 2);
+  assert.ok(seats.every((seat) => seat.key.startsWith('hex-hub-test-')), 'both testers sit at the hub\'s own stations');
 });
 
-test('testing overflow past the hall\'s 2 and the hub\'s 2 test stations falls back to the idle corner, not a rented lab (issue #260)', () => {
+test('testing overflow past the hub\'s 2 test stations falls back to the idle corner, not a rented lab (issue #260)', () => {
   const { layout, agent } = setup();
   const seats = Array.from({ length: 5 }, (_, i) => layout.seatFor(agent(`t${i}`, 'testing'), null)!);
   assert.ok(seats.some((seat) => seat.key.includes('coffee') || seat.key.includes('sofa') || seat.key.startsWith('hex-hub-idle-')));
@@ -446,7 +449,7 @@ test('dropLegacyRoomStorage is a no-op without a storage that can enumerate keys
 test('constructing a building sweeps its own legacy storage once, and never rewrites a room list to it afterward', () => {
   const { store, backing } = legacyStorage({ [floorStorageKey('widget-service')]: JSON.stringify(['office', 'library', 'desks']) });
   const scene = new THREE.Scene();
-  new BuildingLayout(scene, createOffice(scene), { storage: backing, floor: 'widget-service' });
+  new BuildingLayout(scene, new Map(), { storage: backing, floor: 'widget-service' });
   assert.equal(store.has(floorStorageKey('widget-service')), false, 'the stale floor-scoped key is gone');
   assert.ok(store.has(ROOMS_DROPPED_KEY));
   assert.equal(store.has(floorStorageKey('widget-service')) || store.has(BUILDING_STORAGE_KEY), false, 'nothing re-seeds a legacy key after construction');
@@ -472,10 +475,10 @@ test('issue #209: an idle mission agent goes to the main room\'s lounge, not its
   layout.syncWorldRooms([missionRoom()]);
   const idle = layout.seatFor(agent('i', 'idle', { room: 'room-1' }), null)!;
   assert.doesNotMatch(idle.key, /^mission0_/, 'not the war room');
-  // The hall itself already carries idle capacity (the coffee corner and the sofas, the main
-  // room's own lounge/cafeteria, `Office.ts`); a dedicated `lounge` room only opens once that
-  // hall capacity runs out (`idle agents beyond the hall seats get a lounge room`, above).
-  assert.equal(idle.key.includes('coffee') || idle.key.includes('sofa'), true, 'a main-room idle station');
+  // Issue #260 step 7b item 6: the rect hall (its own coffee corner and sofas, `Office.ts`) is
+  // gone — the hex Hub's own kitchen/play corner idle spots are the main room's idle capacity
+  // now (`hubFurnitureSpots`'s own `idle` set, `HexRooms.ts`'s `buildHexOffice`).
+  assert.match(idle.key, /^hex-hub-idle-/, 'a main-room idle station');
 });
 
 test('issue #209: an idle mission agent leaves its war room seat behind when it goes idle', () => {
@@ -955,7 +958,7 @@ test('a main session with no Librarian badge and no war room keeps its own desk 
   const seat = layout.seatFor(agent('r', 'researching'), null)!;
   assert.doesNotMatch(seat.key, /^hex-library-/);
   assert.doesNotMatch(seat.key, /researching/, 'it never visits any researching station, hall shelves included');
-  assert.match(seat.key, /^desk_/);
+  assert.match(seat.key, /^hex-hub-desk-/);
 });
 
 test('a main session with a war room keeps a non-librarian research trip inside that room, not the Library (issue #128 AC3)', () => {
@@ -1065,15 +1068,15 @@ test('the library (the second room the building ever rents) sits at the south-ea
 
 const inWorkspace = (label: string) => ({ group: { id: `g-${label}`, label } });
 
-test('tagged sessions sit at the hall desks with everyone else; no desk room is rented for them', () => {
+test('tagged sessions sit at the hub desks with everyone else; no desk room is rented for them', () => {
   const { layout, agent, scene } = setup();
   const a1 = layout.seatFor(agent('a1', 'implementing', inWorkspace('Alpha')), null)!;
   const b1 = layout.seatFor(agent('b1', 'implementing', inWorkspace('Beta')), null)!;
   const loner = layout.seatFor(agent('n', 'implementing'), null)!;
 
-  assert.match(a1.key, /^desk_/);
-  assert.match(b1.key, /^desk_/);
-  assert.match(loner.key, /^desk_/);
+  assert.match(a1.key, /^hex-hub-desk-/);
+  assert.match(b1.key, /^hex-hub-desk-/);
+  assert.match(loner.key, /^hex-hub-desk-/);
   const labels = scene.children.flatMap((c) => c.children).filter((c) => c.userData.roomLabel !== undefined).map((c) => c.userData.roomLabel);
   assert.ok(!labels.some((label) => label.startsWith('Desks ·')), 'no per-workspace room label');
 });
@@ -1090,26 +1093,38 @@ test('sessions of one workspace get neighboring desks', () => {
   assert.ok(a2.position.distanceTo(a1.position) < b1.position.distanceTo(a1.position), "Alpha's own next session sits closer to it than Beta's desk does");
 });
 
-test('"next to" is physical distance, not a key suffix: a desk one row over beats one across the aisle (#138 fix)', () => {
-  // The hall desks sit in two rows of four, in the back corners since issue #121. desk_3
-  // (end of row 1) and desk_4 (start of row 2) are adjacent keys but about 24 m apart (the
-  // two far corners); desk_3 and desk_7 are far apart in key order but stand in the same
-  // column, 3 m apart. The real nearest desk must win, not the key.
+// Issue #260 step 7b item 6: the hex Hub's own 8 spare desks (`hubFurnitureSpots`) cluster in
+// 2 groups of 4, one at each of two opposite Hub corners, about 9 m apart across the gap —
+// `hex-hub-desk-0..3` at one corner, `hex-hub-desk-4..7` at the other, each group's own 4 desks
+// a bit over 1 m apart in a line. `pickDesk`'s key order (insertion order, 0 through 7) runs
+// straight across both corners, so a free desk back at the FAR corner (released after it filled
+// up) can carry a lower key than a free desk right next to the workspace's own existing one at
+// the NEAR corner — the exact "key suffix misleads, real position wins" shape the old rect
+// hall's own two-rows-of-four desk grid demonstrated (#138), reproduced here by filling every
+// desk once, then releasing three at the far corner so they are free again, but with a far
+// lower key than the two near the workspace's own desk.
+test('"next to" is physical distance, not a key suffix: a desk at the near corner beats one released back at the far corner (#138 fix)', () => {
   const { layout, agent } = setup();
-  layout.seatFor(agent('n0', 'implementing'), null); // desk_0
-  layout.seatFor(agent('n1', 'implementing'), null); // desk_1
-  layout.seatFor(agent('n2', 'implementing'), null); // desk_2
-  const a1 = layout.seatFor(agent('a1', 'implementing', inWorkspace('Alpha')), null)!; // desk_3, the only one free so far
-  assert.equal(a1.key, 'desk_3');
+  for (let i = 0; i < 5; i++) layout.seatFor(agent(`n${i}`, 'implementing'), null); // hex-hub-desk-0..4
+  const home = layout.seatFor(agent('a', 'implementing', inWorkspace('Alpha')), null)!; // hex-hub-desk-5
+  assert.equal(home.key, 'hex-hub-desk-5');
+  layout.seatFor(agent('n6', 'implementing'), null); // hex-hub-desk-6
+  layout.seatFor(agent('n7', 'implementing'), null); // hex-hub-desk-7
+
+  // Release the 3 lowest-keyed desks (0, 1 at the far corner from Alpha's own desk 5; 6 at the
+  // near corner, right next to it) — free, in key order, is [0, 1, 6].
+  layout.release('n0');
+  layout.release('n1');
+  layout.release('n6');
 
   const a2 = layout.seatFor(agent('a2', 'implementing', inWorkspace('Alpha')), null)!;
-  assert.equal(a2.key, 'desk_7', 'the true nearest free desk, not desk_4 (index-adjacent, 24 m away)');
+  assert.equal(a2.key, 'hex-hub-desk-6', 'the true nearest free desk (the near corner), not hex-hub-desk-0 (lowest key, the far corner)');
 });
 
 test('a session whose workspace becomes known later keeps its desk; home is for life', () => {
   const { layout, agent } = setup();
   const first = layout.seatFor(agent('late', 'implementing'), null)!;
-  assert.match(first.key, /^desk_/);
+  assert.match(first.key, /^hex-hub-desk-/);
   assert.equal(layout.seatFor(agent('late', 'implementing', inWorkspace('Gamma')), 'implementing'), null, 'no move');
 });
 

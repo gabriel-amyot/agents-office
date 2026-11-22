@@ -13,7 +13,6 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => new Proxy({}, {
 const { StaticBatch, STATIC_SOURCE_LAYER, markStatic } = await import('../src/scene/StaticMerge.js');
 const { getToonMaterial } = await import('../src/utils/Materials.js');
 const { countDrawCalls } = await import('../src/scene/RenderBudget.js');
-const { createOffice } = await import('../src/scene/Office.js');
 const { BuildingLayout } = await import('../src/addons/building/BuildingLayout.js');
 after(() => {
   dom.window.close();
@@ -148,7 +147,11 @@ test('a zone that casts no shadow merges into meshes that cast none; receive fla
 // batch picks up this layout's own dynamic growth.
 test('a pod subagent\'s stool, added after construction, draws in the merged batch', () => {
   const scene = new THREE.Scene();
-  const layout = new BuildingLayout(scene, createOffice(scene), {
+  // Issue #260 step 7b item 6: `createOffice` (the rect hall) never ran in production for the
+  // 'building' layout (`main.ts`'s own `layoutId === 'activity' ? createOffice(scene) : new
+  // Map()`, step 4) — an empty `Map` matches it; `BuildingLayout`'s own constructor builds the
+  // hex structure regardless.
+  const layout = new BuildingLayout(scene, new Map(), {
     storage: { getItem: () => null, setItem: () => undefined },
   });
   const batch = new StaticBatch(scene);
