@@ -1,5 +1,5 @@
 import { createScene } from './scene/SceneSetup.js';
-import { createOffice } from './scene/Office.js';
+import { createOffice, type Station } from './scene/Office.js';
 import { AgentManager } from './agents/AgentManager.js';
 import { ViewController } from './scene/ViewController.js';
 import { onSelectionChange, selectAgent, selectOrFly, selectedAgentId } from './scene/Selection.js';
@@ -50,17 +50,22 @@ if (returningFromLibrary) {
   window.setTimeout(() => removeTransition(overlay), 420);
 }
 
-// Build office and get stations
-const stations = createOffice(scene);
-
 // Fork add-ons and the browser parts of server plugins register layouts and extensions.
-// Both folders are optional: without them nothing changes.
+// Both folders are optional: without them nothing changes. Must run before `chooseLayoutId`
+// below: it is what makes the 'building' layout (registered by `addons/building.ts`) a known
+// choice in the first place.
 import.meta.glob('./addons/*.ts', { eager: true });
 import.meta.glob('../plugins/*/client.ts', { eager: true });
 
 // Layout: ?layout= in the URL, then the last choice, then the default. Shift+L, then a confirmation, cycles layouts.
 const layoutId = chooseLayoutId(window.location.search, window.localStorage);
 rememberLayoutId(layoutId, window.localStorage);
+
+// Issue #260 step 7b: the rect hall (floor, walls, desks, bookshelf, meeting tables, and the
+// rest of `createOffice`'s furniture) is the activity layout's own office. The building layout
+// has its own hex-built geometry and stations (`BuildingLayout.rebuildHexOffice`); it never
+// reads a station `createOffice` built, so this only runs for the layout that actually needs it.
+const stations: Map<string, Station> = layoutId === 'activity' ? createOffice(scene) : new Map();
 
 // Floors (issue #118): meaningful only for the building layout (the flat activity layout is
 // one shared office, P8, no floors). The floor to focus: `#floor=` in the URL, the last
