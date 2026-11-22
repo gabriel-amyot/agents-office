@@ -646,6 +646,21 @@ export function libraryOverflowResearchingSpot(library: HexRoomGeometry, index: 
   return overflowSpiralPoint(library.center, index, LIBRARY_OVERFLOW_PACKING, LIBRARY_OVERFLOW_MAX_RADIUS, avoid);
 }
 
+const OFFICE_OVERFLOW_PACKING = 0.85;
+const OFFICE_OVERFLOW_MAX_RADIUS = ROOM_RADIUS - 1.5;
+
+/**
+ * The `index`-th overflow queue spot (issue #260 step 7b): past the hex Office's own fixed
+ * queue (`hexQueueSpotWorldPositions`, ~30 spots), a waiting agent gets one of these instead of
+ * the office renting another waiting room the old rect building did. Steers clear of the
+ * office's own center (where the desk/chair/monitor cluster sits, `HEX_OFFICE_DESK`'s own
+ * depth) the same way the Hub and Library overflow spirals steer clear of their own fixed
+ * furniture. Same cursor contract as `hubOverflowIdleSpot`.
+ */
+export function officeOverflowQueueSpot(office: HexRoomGeometry, index: number): { point: HexPoint; nextIndex: number } {
+  return overflowSpiralPoint(office.center, index, OFFICE_OVERFLOW_PACKING, OFFICE_OVERFLOW_MAX_RADIUS, []);
+}
+
 /**
  * The Hub's own fixed furniture layout (issue #260, step 7a part a: overflow past the hall's
  * own desks/test stations/idle corner goes here instead of a rented room). The Hub never grows

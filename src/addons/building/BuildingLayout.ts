@@ -6,7 +6,7 @@ import { OFFICE } from '../../utils/Constants.js';
 import type { LayoutAgent, LayoutMove, LayoutStrategy, RoomView, Seat } from '../../layout/LayoutStrategy.js';
 import { HALL, ROOM_SIZE, matchingDoor, slotFor, type Door, type Rect, type RoomSlot } from './RoomPlanner.js';
 import { buildCeiling, buildRoom, buildWalls, markCutaway, QUEUE_COUNT_SIGN, ROOM_STATION_TYPE, RoomFrame, WALL_HEIGHT, roomTitle, station, wallRects, type RoomKind, type WallRect } from './rooms.js';
-import { deskCameraPose, deskTalkSpotPose, monitorWorldCorners } from './deskGeometry.js';
+import { hexDeskCameraPose, hexDeskTalkSpotPose, hexMonitorWorldCorners, hexQueueSpotWorldPositions } from './hexDeskGeometry.js';
 import { showLoadedPortrait } from './portrait.js';
 import { roomLabel, roomLabelBatchFor } from './roomLabels.js';
 import { buildMissionRoom, type MissionRoom } from './missionRooms.js';
@@ -22,7 +22,7 @@ import type { PickTarget } from '../../scene/Selection.js';
 import { FIGURE_EYE_HEIGHT } from '../../characters/StickFigureParts.js';
 import { createMissionsBoard, placeMissionsBoard, type MissionBoardEntry } from './missionsBoard.js';
 import { buildHexOffice, hexRoomView, type BuiltHexOffice } from './HexRooms.js';
-import { hubOverflowIdleSpot, libraryOverflowResearchingSpot, pointInPolygon, type ComponentRole, type HexWorldCounts } from './HexRoomPlanner.js';
+import { hubOverflowIdleSpot, libraryOverflowResearchingSpot, officeOverflowQueueSpot, pointInPolygon, type ComponentRole, type HexWorldCounts } from './HexRoomPlanner.js';
 import { componentForWing } from './componentWing.js';
 
 /**
@@ -209,6 +209,7 @@ export class BuildingLayout implements LayoutStrategy {
    * only ever grow, so an index (and so its spot) is never reassigned once an agent holds it. */
   private overflowIdleCount = 0;
   private overflowResearchingCount = 0;
+  private overflowQueueCount = 0;
 
   constructor(private scene: THREE.Scene, private stations: Map<string, Station>, options: BuildingOptions = {}) {
     this.now = options.now ?? (() => performance.now());
@@ -243,6 +244,22 @@ export class BuildingLayout implements LayoutStrategy {
     this.scene.add(this.hexOffice.group);
     this.addHexLibraryStations();
     this.addHexHubStations();
+    this.addHexOfficeQueueStations();
+  }
+
+  /**
+   * Issue #260 step 7b: the hex Office's own queue, in front of the hex desk
+   * (`hexQueueSpotWorldPositions`, 30 spots at `ROOM_RADIUS = 9`) — the replacement for the
+   * rect office's rented-room queue (`rooms.ts`'s `office` plan, `type: 'queue'`). Same station
+   * type (`'queue'`), so `orderQueue`/`claimOfType('queue')` need no change beyond where the
+   * spots come from; `setStationPreservingOccupancy` keeps an already-waiting agent's own seat
+   * occupied across a wing-growth rebuild, same as every other hex station here.
+   */
+  private addHexOfficeQueueStations(): void {
+    hexQueueSpotWorldPositions(this.hexOffice.layout).forEach((position, i) => {
+      const lookAt = hexDeskCameraPose(this.hexOffice.layout).position;
+      this.setStationPreservingOccupancy(`hex-office-queue-${i}`, station('queue', position, lookAt));
+    });
   }
 
   /**
@@ -430,50 +447,43 @@ export class BuildingLayout implements LayoutStrategy {
   /**
    * Where the fixed desk-view camera (issue #161, key `H`) sits: behind the user's own desk,
    * a little lower than a standing first-person pose, looking at the queue in front of it.
-   * Null without a rented office room yet (graceful degradation, rule 3) — a layout only ever
-   * has one at construction, so this should not happen in practice, but a fresh office render
-   * mid-rebuild is still handled the same way `roomView` handles an unknown name.
+   * Issue #260 step 7b: the hex office's own desk (`hexDeskGeometry.ts`), built once at
+   * construction and never rented — always present, so this never returns null any more.
    */
   deskView(): { position: THREE.Vector3; lookAt: THREE.Vector3; fov: number } | null {
-    if (!this.rooms.some((room) => room.kind === 'office')) return null;
-    return deskCameraPose();
+    return hexDeskCameraPose(this.hexOffice.layout);
   }
 
   /**
    * Issue #243: the desk-view camera sits essentially where the user's own chair is
-   * (`deskGeometry.ts`'s `DESK_SEAT_OFFSET`, "inside the chair, not on top of the desk"), close
-   * enough and low enough that an 82°-FOV frustum wide enough for the queue (`deskView`'s own
-   * fov, issue #199) always catches the chair's back/seat/pole in its lower half — no pose-only
-   * fix clears the chair without re-shrinking that offset and re-breaking #199's queue framing.
-   * The chair itself (`Desk.ts`'s `createDesk`, named `'desk-chair'`) is hidden instead while in
-   * desk mode: a no-op without a rented office room yet, or if the chair is not found (a layout
-   * mid-rebuild), the same graceful degradation every other desk-view method here uses.
+   * (`DESK_SEAT_OFFSET`, "inside the chair, not on top of the desk"), close enough and low
+   * enough that the hex desk's own FOV (`HEX_DESK_CAMERA_FOV`) always catches the chair's
+   * back/seat/pole in its lower half. The chair itself (`Desk.ts`'s `createDesk`, named
+   * `'desk-chair'`, `HexRooms.ts`'s `buildHexOfficeDesk`) is hidden instead while in desk mode.
    */
   setDeskChairVisible(visible: boolean): void {
-    const office = this.rooms.find((room) => room.kind === 'office');
-    const chair = office?.group.getObjectByName('desk-chair');
+    const chair = this.hexOffice.group.getObjectByName('desk-chair');
     if (chair) chair.visible = visible;
   }
 
   /**
    * World corners of each desk monitor's bezel, left then right (issue #161 review): lets the
    * label declutter keep a queued agent's label clear of them in desk mode. Delegates to the
-   * pure geometry in `deskGeometry.ts` — the one source of where a monitor actually sits, the
+   * pure geometry in `hexDeskGeometry.ts` — the one source of where a monitor actually sits, the
    * same one the desk camera pose above and the mesh builder in `deskMonitors.ts` read, so
    * none of the three can drift from the others (review round 2's own root cause).
    */
   deskMonitorCorners(): THREE.Vector3[][] {
-    return monitorWorldCorners();
+    return hexMonitorWorldCorners(this.hexOffice.layout);
   }
 
   /**
    * Where a selected queued agent walks to address Gabriel directly (issue #162, desk mode
-   * only): a fixed spot in front of the desk, standing, facing the desk camera. Null without a
-   * rented office room yet — the same graceful degradation `deskView` uses.
+   * only): a fixed spot in front of the desk, standing, facing the desk camera. The hex
+   * office's own desk is always present (never rented), so this never returns null any more.
    */
   deskTalkSpot(): Seat | null {
-    if (!this.rooms.some((room) => room.kind === 'office')) return null;
-    const pose = deskTalkSpotPose();
+    const pose = hexDeskTalkSpotPose(this.hexOffice.layout);
     return { key: 'desk-talk-spot', position: pose.position, lookAt: pose.lookAt, posture: 'standing' };
   }
 
@@ -801,10 +811,11 @@ export class BuildingLayout implements LayoutStrategy {
       .filter((state) => state.target === 'queue')
       .sort((a, b) => compareWaits(a.agent.extras, b.agent.extras) || (a.queuedAt ?? 0) - (b.queuedAt ?? 0));
     const spots = this.keysOfType('queue');
-    while (spots.length < waiting.length) {
-      this.addRoom('office');
-      spots.splice(0, spots.length, ...this.keysOfType('queue'));
-    }
+    // Issue #260 step 7b: the hex office's own ~30 queue spots are fixed (never rented, round
+    // 7's own "simplicity and beauty") — past that, a further waiting agent gets its own
+    // overflow spiral spot in the office itself, the same pattern the Hub's idle corner and the
+    // Library's own shelves already use past their fixed furniture.
+    while (spots.length < waiting.length) spots.push(this.allocateOverflowQueueStation());
     // A meeting without a wait also queues, but only fresh and aging waits count for you
     this.showQueueCount(waiting.filter((state) => queuesForYou(state.agent.extras)).length);
     const moves: LayoutMove[] = [];
@@ -820,9 +831,11 @@ export class BuildingLayout implements LayoutStrategy {
     return moves;
   }
 
-  /** The sign under the portrait of the first office: "N waiting", hidden when nobody waits. */
+  /** The sign at the hex office's own desk: "N waiting", hidden when nobody waits. Issue #260
+   * step 7b: the hex desk's own queue-count sign (`HexRooms.ts`'s `buildHexOfficeDesk`), not the
+   * rect office's. */
   private showQueueCount(count: number): void {
-    const sign = this.rooms.find((room) => room.kind === 'office')?.group.getObjectByName(QUEUE_COUNT_SIGN) as CSS2DObject | undefined;
+    const sign = this.hexOffice.group.getObjectByName(QUEUE_COUNT_SIGN) as CSS2DObject | undefined;
     if (!sign || sign.userData.queueCount === count) return;
     sign.userData.queueCount = count;
     sign.element.textContent = `${count} waiting`;
@@ -845,20 +858,17 @@ export class BuildingLayout implements LayoutStrategy {
       : this.keysOfType(type);
     const free = keys.find((key) => !this.stations.get(key)!.occupied);
     if (free) return this.claim([free], type);
-    const rentable = ROOM_FOR_STATION[type];
-    if (rentable) {
-      this.addRoom(rentable);
-      return this.claimOfType(type);
-    }
-    // Issue #260/#261 review: no more rented 'desks'/'lab'/'lounge'/'library' rooms — the hex
-    // Hub's own fixed capacity (spare desks, the kitchen/play corner) and the hex Library's own
-    // two shelves are the first line of overflow past the hall's own stations, and neither ever
-    // grows a new rented room (round 7: "simplicity and beauty"). Review-261 finding 1: past
-    // THAT fixed capacity, this used to hand the same already-occupied station to every later
-    // agent — real stacking. Every further agent instead gets its own fresh spot, grown on
-    // demand from a deterministic, collision-free spiral (never reused, never shared):
-    // research keeps growing inside the Library itself (finding 2: never the rect room),
+    // Issue #260 step 7b: no more rented 'office'/'desks'/'lab'/'lounge'/'library' rooms — the
+    // hex office's own ~30 fixed queue spots, the hex Hub's own fixed capacity (spare desks, the
+    // kitchen/play corner) and the hex Library's own two shelves are the first line of overflow
+    // past the hall's own stations, and none of them ever grows a new rented room (round 7:
+    // "simplicity and beauty"). Review-261 finding 1: past THAT fixed capacity, this used to
+    // hand the same already-occupied station to every later agent — real stacking. Every
+    // further agent instead gets its own fresh spot, grown on demand from a deterministic,
+    // collision-free spiral (never reused, never shared): queueing keeps growing in the office
+    // itself, research keeps growing inside the Library itself (finding 2: never the rect room),
     // everything else piles into the Hub's own idle corner, the same terminal case as before.
+    if (type === 'queue') return this.claim([this.allocateOverflowQueueStation()], type);
     if (type === 'researching') return this.claim([this.allocateOverflowResearchingStation()], type);
     if (type !== 'idle') return this.claimOfType('idle');
     return this.claim([this.allocateOverflowIdleStation()], 'idle');
@@ -888,6 +898,19 @@ export class BuildingLayout implements LayoutStrategy {
     const { point: spot, nextIndex } = libraryOverflowResearchingSpot(library, this.overflowResearchingCount);
     this.overflowResearchingCount = nextIndex;
     this.stations.set(key, station('researching', new THREE.Vector3(spot.x, 0, spot.z), new THREE.Vector3(office.center.x, 0, office.center.z)));
+    return key;
+  }
+
+  /** Issue #260 step 7b: the next overflow queue spot, past the hex office's own ~30 fixed
+   * queue spots — a fresh station every call, never an existing one. Same shared-cursor
+   * contract as `allocateOverflowIdleStation`. */
+  private allocateOverflowQueueStation(): string {
+    const key = `hex-office-queue-overflow-${this.overflowQueueCount}`;
+    const office = this.hexOffice.layout.office;
+    const { point: spot, nextIndex } = officeOverflowQueueSpot(office, this.overflowQueueCount);
+    this.overflowQueueCount = nextIndex;
+    const lookAt = hexDeskCameraPose(this.hexOffice.layout).position;
+    this.stations.set(key, station('queue', new THREE.Vector3(spot.x, 0, spot.z), lookAt));
     return key;
   }
 

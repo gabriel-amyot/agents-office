@@ -14,7 +14,7 @@ import {
   MONITOR_D_OFFSET,
   MONITOR_Y,
   rayBlockedByQuad,
-} from './deskGeometry.js';
+} from './deskConstants.js';
 
 /**
  * Issue #260 step 7b: the same desk-view geometry `deskGeometry.ts` already gives the rect
