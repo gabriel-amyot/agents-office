@@ -12,9 +12,13 @@ import type { HexRoomGeometry } from './HexRoomPlanner.js';
  * Issue #269 fix: `placeMissionsBoard` used to hang this on the rect building's own hall wall
  * (`mesh.position.set(-5, 1.7, -12.94)`, a hand-measured spot on a wall issue #260 deleted).
  * In the hex layout that coordinate is just empty air between the Hub and its neighbors —
- * exactly the "floating white board in the void" Gabriel flagged live. It now mounts on the
- * Hub's own wall, the same corner-interpolation `HexRooms.ts`'s elevator/kitchen placeholders
- * already use, at a third open-ish direction (`+4`) so it does not overlap either.
+ * exactly the "floating white board in the void" Gabriel flagged live. It now mounts on an
+ * actual closed wall segment's midpoint (review round: a corner-interpolation, like the
+ * elevator/kitchen placeholders use, lands near a vertex between two walls, not flush against
+ * either — 1+ units off the nearest wall by measurement). Edge `+4` off the Hub's first stair
+ * is still the preferred slot (clear of the elevator at `+3` and the kitchen at `+2`), but if
+ * a later mission wing opens that edge too, this falls back to the next closed one instead of
+ * floating in the doorway.
  */
 
 export interface MissionBoardEntry {
@@ -79,12 +83,18 @@ export function placeMissionsBoard(mesh: THREE.Mesh, scene: THREE.Scene, hub?: H
     scene.add(mesh);
     return;
   }
-  const wallward = hub.corners[(hub.openEdges[0] + 4) % 6]!;
+  // Preferred edge first (`+4`, clear of the elevator and kitchen), then the rest of the hex
+  // in order, so a closed wall is always found even once other mission wings open more edges.
+  const preferredOrder = [4, 5, 3, 2, 1, 0].map((offset) => (hub.openEdges[0]! + offset) % 6);
+  const wallEdge = preferredOrder.find((edge) => !hub.openEdges.includes(edge)) ?? preferredOrder[0]!;
+  const a = hub.corners[wallEdge]!;
+  const b = hub.corners[(wallEdge + 1) % 6]!;
+  const wallMid = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
   const TOWARD_WALL = 0.85;
   mesh.position.set(
-    hub.center.x + (wallward.x - hub.center.x) * TOWARD_WALL,
+    hub.center.x + (wallMid.x - hub.center.x) * TOWARD_WALL,
     BOARD_HEIGHT,
-    hub.center.z + (wallward.z - hub.center.z) * TOWARD_WALL,
+    hub.center.z + (wallMid.z - hub.center.z) * TOWARD_WALL,
   );
   mesh.lookAt(hub.center.x, BOARD_HEIGHT, hub.center.z);
   scene.add(mesh);
