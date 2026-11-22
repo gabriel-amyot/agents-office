@@ -42,66 +42,66 @@ const HALL_CONNECTOR_DOOR: HexPoint = { x: (HALL.minX + HALL.maxX) / 2, z: HALL.
  * default frame and taller label plates), but the overlap check only clears past a magnitude
  * that moves with the lattice's own size.
  *
- * Issue #261 review (design fidelity: `LATTICE_SPACING` 26 -> 23, `OFFICE_RADIUS` new at 10 —
- * both of the review's own "coordinated pass" items above) moved both tests' own binding
- * points: a bigger Office hex and a tighter lattice both push the structure's own edge further
- * toward the rect building at any given `HEX_OFFSET`, so the magnitude that clears the overlap
- * check grew even though the structure itself reads tighter. Re-measured the same way (a linear
- * scan along this exact direction, smallest magnitude that clears the overlap stress case),
- * with one companion change to the stress case itself: `RENTED_ROOM_COUNT` (see that test's own
- * comment) dropped from 25 to 5 — issue #260 retired every rentable room kind except `office`'s
- * own overflow waiting room, so a realistic worst case on the rect side is a small handful of
- * waiting rooms, not the old multi-kind rental free-for-all 25 modeled. Honest, not padded:
- * verified against the real-size fixture, whose own `buildRealSizeOffice()` comment already
- * says the rect building never grows past its one office room at all at today's traffic.
+ * Issue #261 review round 2 (design fidelity, the main point): the first design-fidelity pass
+ * (`LATTICE_SPACING` 26 -> 23, a bigger `OFFICE_RADIUS`) still read as one-room-wide chains with
+ * long bridges, not a mosaic. Two causes, both now fixed together:
+ *
+ * 1. Mixed radii cannot share one lattice edge-to-edge, no matter how tight the spacing — every
+ *    room (Hub, Office, Library, every war room) is the same `ROOM_RADIUS` now (see below), so
+ *    `LATTICE_SPACING` can be derived once, honestly, for true edge-to-edge tangency plus one
+ *    short bridge gap.
+ * 2. The claim algorithm itself (`HexPlanner.claimHexRegion`) already fills whole rings,
+ *    sector by sector, nearest-angle first — a true contiguous wedge, verified directly
+ *    (`tests/hex-planner.test.ts`). What read as "chains" in the round-2 screenshot was real
+ *    wedges that were too THIN to read as a mass at a realistic room count (2-4 war rooms per
+ *    wing only reaches ring 1-2, a handful of tiles) stretched across the old spacing's own long
+ *    gaps. Tight, edge-to-edge spacing fixes the read without changing the claim algorithm,
+ *    which was already correct.
+ *
+ * Re-measured the same way as before (a linear scan along this exact direction, smallest
+ * magnitude that clears the overlap stress case), with one companion change to the stress case
+ * itself: `RENTED_ROOM_COUNT` (see that test's own comment) dropped from 25 to 5 — issue #260
+ * retired every rentable room kind except `office`'s own overflow waiting room, so a realistic
+ * worst case on the rect side is a small handful of waiting rooms, not the old multi-kind rental
+ * free-for-all 25 modeled. Honest, not padded: verified against the real-size fixture, whose own
+ * `buildRealSizeOffice()` comment already says the rect building never grows past its one office
+ * room at all at today's traffic.
  */
-export const HEX_OFFSET: HexPoint = { x: -34.3, z: 59.9 };
+export const HEX_OFFSET: HexPoint = { x: -34.8, z: 60.7 };
 /**
- * Distance between neighboring lattice cell centers (issue #261 review, the design-fidelity
- * finding: at the old value of 26 against room radii of 7-10, neighboring rooms sat 8 to 10
- * units apart — small, far-apart islands joined by long diagonal walkways, not the round 3
- * "floating islands" mosaic Gabriel picked (tiles nearly touching, short bridges). Shrunk to
- * leave a short bridge gap (the review's own 1.5-3 unit range) at the single largest pairwise
- * sum on the lattice — `HUB_RADIUS + OFFICE_RADIUS` = 20 (issue #261's own office-size decision
- * grew the office to a Hub-like radius in the same pass, since it changes this exact number) —
- * `LATTICE_SPACING - 20` = 3, right at the top of that range. Every other pair on the lattice
- * (library-library and wing-wing at `ROOM_RADIUS`/`WAR_ROOM_HEX_RADIUS`, hub-wing at
- * `HUB_RADIUS + WAR_ROOM_HEX_RADIUS` = 18) is smaller than this one, so every one of their own
- * gaps shrank by the same 11 units this constant did — still a real walkway span, just a much
- * shorter one, everywhere on the structure, not just at the Hub-Office edge. */
-export const LATTICE_SPACING = 23;
-/** An ordinary hex room's own floor/wall circumradius (the Library; issue #261: the Office no
- * longer shares this — see `OFFICE_RADIUS`). */
-export const ROOM_RADIUS = 7;
-/** The Hub's own radius: a larger hex, the old `HALL`'s role. */
-export const HUB_RADIUS = 10;
-/**
- * The Office's own circumradius (issue #261 review, the office-size decision: parked step 7b's
- * own geometry note found the office is a through-passage, Hub door and Library opening on
- * opposite edges, and at the old shared `ROOM_RADIUS` (7) its own queue only fit 8-10 spots —
- * not enough for Gabriel's own stated worst case, 14+ agents waiting across every floor. Grown
- * to a Hub-like radius so the queue fits at least 20 (the same `w(d)` half-width formula 7b's
- * own planning comment derived scales up directly: `3.5 * radius/7` at every `d`, so a radius-10
- * office's queue rows hold roughly 10/7 as many spots as the radius-7 figures that comment
- * measured — comfortably past 20 across its 2 rows). Real office furniture and queue-spot
- * placement is still step 7b's own scope, not built here; this only sizes the room (and so the
- * lattice around it) honestly ahead of that work, per the step 7b handoff's own instruction to
- * resolve this decision before anyone builds from it.
+ * Every hex room's own floor/wall circumradius — the Hub, the Office, the Library and every war
+ * room, all ONE size (issue #261 review round 2: "mixed radii cannot share one lattice edge to
+ * edge"). 9 is the review's own suggested value: big enough for the war room's own named base
+ * set (desk, debug station, whiteboard, small bookshelf — proven down to 8 by
+ * `tests/mission-rooms.test.ts`'s own exhaustive mesh-bounds check, so 9 has headroom, not a
+ * squeeze) and the office's own queue (step 7b's own scope to build, not sized to exactly 20
+ * here — a uniform lattice is the harder constraint this round; if 7b's own queue math needs
+ * more than one uniform tile gives, a multi-tile office cluster, same role repeated over 2-3
+ * adjacent cells, is the documented fallback, not a special-cased bigger radius breaking the
+ * tangency this constant buys everywhere else).
  */
-export const OFFICE_RADIUS = 10;
+export const ROOM_RADIUS = 9;
+/** How much short bridge gap to leave between two tangent hex rooms (the review's own
+ * "about 2" units) — see `LATTICE_SPACING`. */
+export const BRIDGE_GAP = 2;
 /**
- * A component-wing war room's own circumradius (issue #259 review round 2). Gabriel's own
- * round-6 complaint: the first hex war room pass (radius 16, built to contain the old rect
- * room's furniture plan unscaled) was "a bit too big and a bit too empty" — a smaller room
- * sized for his own named base set (one desk, one debug station, one whiteboard, one small
- * bookshelf, no sofa, no table, `warRoomFurnishing.ts`'s own doc comment) instead. 8 is the
- * measured value `tests/mission-rooms.test.ts`'s own exhaustive mesh-bounds check (every mesh
- * a built room actually renders, at full desk/debug counts, several wings and ordinals) passes
- * at, not a guessed round number — the smallest radius that check accepted once the furniture
- * plan itself moved onto 4 of the room's own 6 walls (`warRoomFurnishing.ts`'s own doc
- * comment) instead of being authored for a rectangle and left to fit however it could.
- */
-export const WAR_ROOM_HEX_RADIUS = 8;
+ * Distance between neighboring lattice cell centers. Issue #261 review round 2: every room
+ * shares one `ROOM_RADIUS` now, so this is derived once, honestly, for true edge-to-edge
+ * tangency (`sqrt(3) * ROOM_RADIUS`, the exact flat-top-hex center distance at which two
+ * same-size hexes touch with zero gap) plus `BRIDGE_GAP` — not picked to clear a pairwise-sum
+ * check the way the mixed-radius version needed. */
+export const LATTICE_SPACING = Math.sqrt(3) * ROOM_RADIUS + BRIDGE_GAP;
+/** The Hub's own radius — issue #261 review round 2: no longer a bigger hex (the old `HALL`'s
+ * role still, just sized like every other room now, so it tangents its own ring-1 neighbors
+ * the same way they tangent each other). */
+export const HUB_RADIUS = ROOM_RADIUS;
+/** The Office's own circumradius — same uniform size, see `ROOM_RADIUS`'s own comment for why
+ * this no longer differs from the Hub or the Library. */
+export const OFFICE_RADIUS = ROOM_RADIUS;
+/** A component-wing war room's own circumradius — same uniform size. Comfortably above the 8
+ * `tests/mission-rooms.test.ts`'s own exhaustive mesh-bounds check proved sufficient for the
+ * named base furniture set (issue #259 review round 2's own finding). */
+export const WAR_ROOM_HEX_RADIUS = ROOM_RADIUS;
 
 /** Whether a hex room role is one of the 4 component wings (not the hub, office or library). */
 export function isComponentRole(role: RoomRole): role is ComponentRole {
@@ -120,12 +120,16 @@ export const WALKWAY_WIDTH = 1.6;
 export const HEX_WALL_THICKNESS = 0.2;
 /** How far a stair ramp runs out from its room's wall before reaching the walkway's height
  * (a V1 approximation of "a little staircase": one straight incline, not discrete steps —
- * the visual detail to refine once the walking flow itself is proven). Issue #261 review:
- * re-derived alongside `LATTICE_SPACING` — at the tightest gap on the lattice (the Hub-Office
- * edge, 3 units after the spacing cut above), two full-length ramps from each side need to fit
- * without crossing past the gap's own midpoint; `2 * RAMP_LENGTH` stays within that 3-unit gap,
- * matching the review's own "1.5 to 3 units" short-bridge range. */
-export const RAMP_LENGTH = 1.5;
+ * the visual detail to refine once the walking flow itself is proven). Issue #261 review round
+ * 2: re-derived alongside the uniform `ROOM_RADIUS` and `BRIDGE_GAP` — every room-to-room gap
+ * on the lattice is the same `BRIDGE_GAP` (2) now, so `2 * RAMP_LENGTH` must stay within it
+ * without the two ramps crossing past the gap's own midpoint. */
+export const RAMP_LENGTH = BRIDGE_GAP / 2 - 0.1;
+/** A separate, more generous clearance for the one-off Hub-to-hall connector
+ * (`hallConnectorFor`): that bridge is not bound by the regular lattice's own tight
+ * `BRIDGE_GAP` — it only has to clear the rect hall's own rectangular footprint, where a
+ * thin margin risks visually clipping the hall's wall. */
+const HALL_CLEARANCE = 3;
 
 function add(a: HexPoint, b: HexPoint): HexPoint {
   return { x: a.x + b.x, z: a.z + b.z };
@@ -387,10 +391,10 @@ function rampToward(center: HexPoint, radius: number, toward: HexPoint): { openE
 function hallConnectorFor(hub: HexRoomGeometry): HallConnector {
   const { openEdge, ramp: hubRamp } = rampToward(hub.center, hub.radius, HALL_CONNECTOR_DOOR);
   hub.openEdges.push(openEdge);
-  const clearX = hub.center.x <= HALL.minX ? HALL.minX - RAMP_LENGTH
-    : hub.center.x >= HALL.maxX ? HALL.maxX + RAMP_LENGTH
+  const clearX = hub.center.x <= HALL.minX ? HALL.minX - HALL_CLEARANCE
+    : hub.center.x >= HALL.maxX ? HALL.maxX + HALL_CLEARANCE
     : hubRamp.to.x;
-  const clearZ = HALL.minZ - RAMP_LENGTH;
+  const clearZ = HALL.minZ - HALL_CLEARANCE;
   const bend1: HexPoint = { x: clearX, z: hubRamp.to.z };
   const bend2: HexPoint = { x: clearX, z: clearZ };
   const bend3: HexPoint = { x: HALL_CONNECTOR_DOOR.x, z: clearZ };
@@ -442,9 +446,10 @@ export function buildHexWorld(counts: HexWorldCounts): HexOfficeLayout {
   const rooms = new Map<string, HexRoomGeometry>();
   for (const slot of slots) {
     const center = worldCenter(slot.cell);
-    const radius = slot.role === 'hub' ? HUB_RADIUS
-      : slot.role === 'office' ? OFFICE_RADIUS
-      : isComponentRole(slot.role) ? WAR_ROOM_HEX_RADIUS : ROOM_RADIUS;
+    // Issue #261 review round 2: one uniform radius for every role now (`HUB_RADIUS`,
+    // `OFFICE_RADIUS` and `WAR_ROOM_HEX_RADIUS` all equal `ROOM_RADIUS` — see their own
+    // comments), the tangency the whole lattice-spacing fix depends on.
+    const radius = ROOM_RADIUS;
     rooms.set(hexKey(slot.cell), { center, radius, openEdges: [], corners: hexRoomCorners(center, radius), role: slot.role, slot });
   }
 
