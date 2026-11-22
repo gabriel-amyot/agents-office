@@ -87,7 +87,7 @@ export const MISSION_COUNTS_STORAGE_KEY = 'agents-office.building.missionCounts'
 const DEFAULT_DWELL_MS = 4000;
 const QUEUE_REFRESH_MS = 500;
 const MISSIONS_BOARD_REFRESH_MS = 1000;
-const ROOM_KINDS: readonly string[] = ['office', 'desks', 'library', 'lab', 'lounge'];
+const ROOM_KINDS: readonly string[] = ['office', 'library'];
 /** A standing agent's own eye height (issue #89, `#room=` first person; issue #174 aligned this with `FreeCamera`'s own ground-walk eye height). */
 const ROOM_VIEW_EYE_HEIGHT = FIGURE_EYE_HEIGHT;
 
@@ -221,6 +221,24 @@ export class BuildingLayout implements LayoutStrategy {
     this.hexOffice = buildHexOffice(this.missionWingCounts);
     this.scene.add(this.hexOffice.group);
     this.addHexLibraryStations();
+    this.addHexHubStations();
+  }
+
+  /**
+   * Issue #260 (step 7a part a): the Hub's own fixed open-office capacity, the replacement for
+   * the old rented `desks`/`lounge` rooms — a spare desk (`implementing`) once the hall's own
+   * desks are full, and an idle spot (`idle`) near the kitchen/play corner once the hall's own
+   * coffee/sofa spots are full. `HexRooms.ts` already built the desk meshes and the kitchen/
+   * play corner's placeholder furniture; this only registers the stations those spots claim,
+   * the same split `addHexLibraryStations` already keeps for the Library.
+   */
+  private addHexHubStations(): void {
+    this.hexOffice.hubDeskSpots.forEach((spot, i) => {
+      this.stations.set(`hex-hub-desk-${i}`, station('implementing', spot.position, spot.lookAt));
+    });
+    this.hexOffice.hubIdleSpots.forEach((spot, i) => {
+      this.stations.set(`hex-hub-idle-${i}`, station('idle', spot.position, spot.lookAt));
+    });
   }
 
   /**
@@ -645,18 +663,17 @@ export class BuildingLayout implements LayoutStrategy {
   }
 
   /**
-   * The agent's desk for life, in the shared desk pool (the hall desks, then a
-   * rented `desks` room when those run out). A session in a herdr workspace
-   * prefers a free desk next to one already held by the same workspace.
+   * The agent's desk for life, in the shared desk pool (the hall desks, then the hex Hub's
+   * own spare desks, issue #260). A session in a herdr workspace prefers a free desk next to
+   * one already held by the same workspace. Past that fixed pool (the Hub never grows, round 7:
+   * "simplicity and beauty," not an unbounded rented-room chain any more), the same
+   * graceful-degradation path `claimOfType` already uses for any other kind of overflow: a spot
+   * in the Hub's idle corner, not a crash.
    */
   private homeOf(state: AgentState): string {
     if (state.home) return state.home;
     const workspace = this.workspaceOf(state);
-    let free = this.pickDesk(workspace);
-    if (!free) {
-      this.addRoom('desks');
-      free = this.pickDesk(workspace)!;
-    }
+    const free = this.pickDesk(workspace) ?? this.claimOfType('idle');
     this.stations.get(free)!.occupied = true;
     state.home = free;
     return free;
@@ -793,8 +810,19 @@ export class BuildingLayout implements LayoutStrategy {
       : this.keysOfType(type);
     const free = keys.find((key) => !this.stations.get(key)!.occupied);
     if (free) return this.claim([free], type);
-    this.addRoom(ROOM_FOR_STATION[type] ?? 'lounge');
-    return this.claimOfType(type);
+    const rentable = ROOM_FOR_STATION[type];
+    if (rentable) {
+      this.addRoom(rentable);
+      return this.claimOfType(type);
+    }
+    // Issue #260: no more rented 'desks'/'lab'/'lounge' rooms — the hex Hub's own fixed
+    // capacity (spare desks, the kitchen/play corner) is the only overflow past the hall's own
+    // stations, and the Hub never grows (round 7: "simplicity and beauty"). Past even that,
+    // every remaining kind of overflow shares the Hub's idle corner, the same
+    // graceful-degradation path `claim()` already uses when a pod runs out of its own 6 spots;
+    // idle itself is the terminal case, so it never recurses back into this branch.
+    if (type !== 'idle') return this.claimOfType('idle');
+    return this.keysOfType('idle')[0]!;
   }
 
   private claim(keys: string[], type: string): string {

@@ -141,24 +141,30 @@ test('a zone that casts no shadow merges into meshes that cast none; receive fla
   assert.equal(batch.mergedMeshes.filter((mesh) => mesh.receiveShadow).length, 1);
 });
 
+// Issue #260 (step 7a): 'lounge'/'desks' are retired rect kinds — the only room kind that still
+// grows past ring 0 is 'office' itself, once its own queue (~23 spots per room) fills past
+// several rooms' worth of waiting agents (the same overflow driver `wayfinding.test.ts`'s own
+// "outer rings" test now uses).
 test('the building still opens room walls by name after the merge, and the new room draws', () => {
   const scene = new THREE.Scene();
-  const rooms = Array.from({ length: 7 }, () => 'lounge');
-  const store = new Map([['agents-office.building.rooms', JSON.stringify(rooms)]]);
   const layout = new BuildingLayout(scene, createOffice(scene), {
-    storage: { getItem: (key: string) => store.get(key) ?? null, setItem: () => undefined },
+    storage: { getItem: () => null, setItem: () => undefined },
   });
   const batch = new StaticBatch(scene);
   batch.update();
-  const roomCount = layout.roomKinds.length;
 
-  // Fill every hall desk first: the shared pool (#138) means a workspace session only rents a room once those are gone
-  for (let i = 0; i < 8; i++) layout.seatFor({ id: `s${i}`, activity: 'implementing' }, null);
+  // Fill the first ring's worth of office queue capacity (roughly 7 rooms * 23 spots).
+  for (let i = 0; i < 160; i++) {
+    layout.seatFor({ id: `q${i}`, activity: 'meeting', extras: { attention: 'waiting', waitMinutes: i } }, null);
+  }
+  const roomCount = layout.roomKinds.length;
   const before = batch.mergedMeshes.reduce((sum, mesh) => sum + mesh.geometry.attributes.position.count, 0);
 
-  // One more session rents a desk room: the ninth room opens a door in the room inside it
-  layout.seatFor({ id: 'a', activity: 'implementing', extras: { group: { id: 'g', label: 'ws' } } }, null);
-  assert.equal(layout.roomKinds.length, roomCount + 1, 'a ring-1 room was added');
+  // More waiting agents than the current rooms' own queue capacity rents one more office room.
+  for (let i = 160; i < 200; i++) {
+    layout.seatFor({ id: `q${i}`, activity: 'meeting', extras: { attention: 'waiting', waitMinutes: i } }, null);
+  }
+  assert.ok(layout.roomKinds.length > roomCount, 'a new room was added');
   assert.equal(batch.update(), true);
   const afterCount = batch.mergedMeshes.reduce((sum, mesh) => sum + mesh.geometry.attributes.position.count, 0);
   assert.ok(afterCount > before, 'the new room draws');

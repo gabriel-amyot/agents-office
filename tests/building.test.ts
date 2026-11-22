@@ -129,12 +129,13 @@ test('two floors keep separate room lists in the same storage: growing one never
   new BuildingLayout(sceneA, createOffice(sceneA), { storage: backing, floor: 'agents-office' });
   const sceneB = new THREE.Scene();
   const layoutB = new BuildingLayout(sceneB, createOffice(sceneB), { storage: backing, floor: 'widget-service' });
-  // Fill Widget Service's implementing seats until it rents a desks room, mirroring the
-  // existing "the building rents a desk room ..." test below (10 seats fill the hall desks).
+  // Issue #260: implementing overflow no longer rents a 'desks' room (it absorbs into the hex
+  // Hub's own fixed spare desks instead), so Widget Service's own saved room list never grows
+  // past 'office' either — this still proves the two floors' room lists stay independent.
   for (let i = 0; i < 10; i++) layoutB.seatFor({ id: `agent-${i}`, activity: 'implementing' }, null);
 
   assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office']);
-  assert.ok(JSON.parse(storage.get(floorStorageKey('widget-service'))!).includes('desks'));
+  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('widget-service'))!), ['office']);
 });
 
 // --- Lobby (issue #192): one office, never one per floor ---
@@ -146,8 +147,9 @@ test('the office always builds first, even with a stored room list that somehow 
   const layout = new BuildingLayout(scene, createOffice(scene), { storage: backing, floor: 'widget-service' });
 
   // Issue #258: the stored 'library' entry is dropped (it is a hex room now, never a rect
-  // roomKind), the same silent drop every other retired rect kind already gets.
-  assert.deepEqual(layout.roomKinds, ['office', 'desks']);
+  // roomKind). Issue #260: 'desks' is dropped too (a retired rented kind) — the same silent
+  // drop every other retired rect kind already gets.
+  assert.deepEqual(layout.roomKinds, ['office']);
   assert.equal(scene.getObjectByName('room-0-office')?.name, 'room-0-office', 'the office still sits at index 0, the lobby\'s own fixed spot');
 });
 
@@ -316,47 +318,46 @@ test('your turn without a wait time stays out of the queue, as before', () => {
   assert.doesNotMatch(seat.key, /queue/);
 });
 
-test('the building rents a desk room when the hall desks are taken, and rebuilds it after a reload', () => {
-  const { layout, agent, storage } = setup();
+// Issue #260 (step 7a): the rented 'desks' room is gone — overflow past the hall's own 8 desks
+// goes to the hex Hub's own spare desks instead of a new rect room.
+test('the hall desks overflow onto the hex hub\'s own spare desks, never a rented room', () => {
+  const { layout, agent } = setup();
   const seats = Array.from({ length: 10 }, (_, i) => layout.seatFor(agent(`s${i}`, 'implementing'), null)!);
   assert.equal(new Set(seats.map((s) => s.key)).size, 10);
-  assert.deepEqual(layout.roomKinds, ['office', 'desks']);
-
-  const reloaded = setup(storage).layout;
-  assert.deepEqual(reloaded.roomKinds, ['office', 'desks']);
+  assert.deepEqual(layout.roomKinds, ['office'], 'no new rect room opens for the overflow');
+  assert.ok(seats.some((seat) => seat.key.startsWith('hex-hub-desk-')), 'the overflow desks are the hub\'s own');
 });
 
-test('a saved layout with a stale library entry rents the surviving kinds at the slot their own new index gives them, the same way on every reload (issue #128 review round 2, issue #258)', () => {
-  // Rooms are remembered by kind, in rental order, and rented back in that same order on
-  // reload (`roomKinds` above): slotFor(index) decides where each one physically sits, by
-  // index alone, not by kind. Issue #258: 'library' is dropped from a stored list (it is a hex
-  // room now, never a rect roomKind), so a pre-#258 saved 3-room building (office, library,
-  // desks) comes back as 2 rect rooms, office at slot 0 (east-center, unmoved) and desks at
-  // slot 1 (south-east) — the slot the Library itself used to occupy.
-  //
-  // This asserts the layout's own built rooms (by their `room-${index}-${kind}` name in the
-  // scene, `src/addons/building/rooms.ts`), not `slotFor` in isolation: a bug in `addRoom`
-  // that called `slotFor` with the wrong index would still leave `slotFor` itself correct,
-  // and a test that only re-checked `slotFor` would never see it (issue #128 review round 2).
+test('the desks RoomKind no longer exists: the building never opens one (issue #260)', () => {
+  const { layout } = setup();
+  assert.ok(!layout.roomKinds.includes('desks' as never), 'no desks room kind is ever recorded');
+});
+
+test('a saved building with an old desks (and library) entry in storage drops both silently (issue #258, issue #260)', () => {
   const storage = new Map([[BUILDING_STORAGE_KEY, JSON.stringify(['office', 'library', 'desks'])]]);
-  const { layout, scene } = setup(storage);
-  assert.deepEqual(layout.roomKinds, ['office', 'desks']);
-  const office = builtRoomRect(scene, 0, 'office');
-  const desks = builtRoomRect(scene, 1, 'desks');
-  assert.deepEqual(office, { minX: 15, maxX: 27, minZ: -6, maxZ: 6 }, 'office: east-center, unmoved');
-  assert.ok(desks.minZ > 0, `desks: south-east, where the library used to sit before issue #120's swap, got ${JSON.stringify(desks)}`);
-
-  // Reloading the same saved kind order again lands every room at the same physical rect.
-  const again = setup(new Map(storage));
-  assert.deepEqual(again.layout.roomKinds, layout.roomKinds);
-  assert.deepEqual(builtRoomRect(again.scene, 0, 'office'), office, 'office: same rect after reload');
-  assert.deepEqual(builtRoomRect(again.scene, 1, 'desks'), desks, 'desks: same rect after reload');
+  const { layout } = setup(storage);
+  assert.deepEqual(layout.roomKinds, ['office'], 'the stale library and desks entries are both filtered out, no error');
 });
 
-test('idle agents beyond the hall seats get a lounge room', () => {
+// Issue #260: idle overflow past the hall's own coffee/sofa spots goes to the hex Hub's own
+// kitchen/play corner instead of a rented lounge room.
+test('idle agents beyond the hall seats overflow onto the hex hub\'s own idle spots, never a rented lounge', () => {
   const { layout, agent } = setup();
-  for (let i = 0; i < 10; i++) layout.seatFor(agent(`i${i}`, 'idle'), null);
-  assert.ok(layout.roomKinds.includes('lounge'));
+  const seats = Array.from({ length: 10 }, (_, i) => layout.seatFor(agent(`i${i}`, 'idle'), null)!);
+  assert.ok(!layout.roomKinds.includes('lounge' as never));
+  assert.ok(seats.some((seat) => seat.key.startsWith('hex-hub-idle-')), 'the overflow idle spots are the hub\'s own');
+});
+
+test('the lounge RoomKind no longer exists: the building never opens one (issue #260)', () => {
+  const { layout } = setup();
+  assert.ok(!layout.roomKinds.includes('lounge' as never), 'no lounge room kind is ever recorded');
+});
+
+test('testing overflow past the hall\'s own 2 test stations falls back to the idle corner, not a rented lab (issue #260)', () => {
+  const { layout, agent } = setup();
+  const seats = Array.from({ length: 4 }, (_, i) => layout.seatFor(agent(`t${i}`, 'testing'), null)!);
+  assert.ok(!layout.roomKinds.includes('lab' as never));
+  assert.ok(seats.some((seat) => seat.key.includes('coffee') || seat.key.includes('sofa') || seat.key.startsWith('hex-hub-idle-')));
 });
 
 test('subagents gather around their parent desk', () => {
@@ -507,12 +508,12 @@ test('the legacy room list migrates forward to the first specific floor ever foc
     floor: 'agents-office',
   });
 
-  // Issue #258: the copied legacy list still carries 'library', but the floor key is
-  // immediately overwritten by this same construction's own `saveRooms()` with the real,
-  // filtered room list (the Library is a hex room now, never a rect roomKind) — the legacy
-  // key itself is the only place the raw copied value survives, untouched.
-  assert.deepEqual(layout.roomKinds, ['office', 'desks']);
-  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office', 'desks']);
+  // Issue #258: the copied legacy list still carries 'library'; issue #260 adds 'desks' to the
+  // same pile — but the floor key is immediately overwritten by this same construction's own
+  // `saveRooms()` with the real, filtered room list (both are retired rect kinds now) — the
+  // legacy key itself is the only place the raw copied value survives, untouched.
+  assert.deepEqual(layout.roomKinds, ['office']);
+  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office']);
   assert.deepEqual(JSON.parse(storage.get(BUILDING_STORAGE_KEY)!), ['office', 'library', 'desks'], 'left behind, not deleted');
 });
 
@@ -546,7 +547,7 @@ test('"all floors" never migrates: it keeps reading the legacy key directly, sam
   const layout = new BuildingLayout(new THREE.Scene(), createOffice(new THREE.Scene()), {
     storage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => void storage.set(k, v) },
   });
-  assert.deepEqual(layout.roomKinds, ['office', 'desks']);
+  assert.deepEqual(layout.roomKinds, ['office']);
 });
 
 // --- Issue #126: war-room furniture routes agent activity, in-room first ---

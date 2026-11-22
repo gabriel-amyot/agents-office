@@ -264,7 +264,12 @@ test('the worst case measures the same total every run: the fixture\'s one rando
   // 8 runs — the fixture's own seeded names (`tests/real-size-office.ts`) never change which
   // hair style, face state or equipped item an agent lands on between runs, and the tool crib
   // is one fixed static piece.
-  assert.deepEqual([...totals], [385], `expected every one of 8 runs to measure 385, got ${[...totals]}`);
+  // Issue #260 (step 7a): 'desks'/'lab'/'lounge' retire — this fixture's own 40 agents no
+  // longer rent extra rect rooms for their overflow (`real-size-office.ts`'s own doc comment:
+  // up to 16 of them, before this step), freeing every one of their own room-zone draw calls;
+  // the hex Hub's own new spare-desk furniture (`hex-hub-desks`, one merged zone regardless of
+  // how many desks it holds) adds exactly 1 back. Net measured: -6, landing at 379.
+  assert.deepEqual([...totals], [379], `expected every one of 8 runs to measure 379, got ${[...totals]}`);
 });
 
 test('the merge keeps every visible furniture triangle: merged vertices equal the source vertices', () => {

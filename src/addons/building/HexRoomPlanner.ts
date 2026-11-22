@@ -29,10 +29,16 @@ import { OFFICE } from '../../utils/Constants.js';
  * building's own spread (issue #259's own review). `-x, +z` together keep the Hub's own center,
  * and so every sector's own growth ray, outside the rect-room footprint at any realistic room
  * count on both sides — re-verified empirically (`tests/mission-wing-overlap.test.ts`'s own
- * 25-rented/42-war-room stress case), not re-derived by hand: this is close to the smallest
- * magnitude in that direction with zero overlaps, leaving only a small margin.
+ * 25-rented/42-war-room stress case), not re-derived by hand. Two tests pull against each other
+ * along this exact ray: smaller is always better for the real-size default-isometric label-
+ * readability test (every hex floor is now tagged `userData.floor`, part c below, so a closer
+ * structure means a tighter default frame and taller label plates), but the overlap check only
+ * clears past roughly 70 units out in this direction — the binding constraint. This value is the
+ * smallest magnitude (measured, not guessed) that still clears the overlap stress case, which is
+ * also the best the readability test can get: about a tenth of a pixel of margin over its 22 px
+ * floor. Tight; revisit both numbers together if either test's own content changes.
  */
-export const HEX_OFFSET: HexPoint = { x: -60, z: 110 };
+export const HEX_OFFSET: HexPoint = { x: -38.7, z: 67.6 };
 /** Distance between neighboring lattice cell centers. Rooms are deliberately gapped (their
  * own drawn radius is smaller than this), since nothing but a walkway ever bridges two of
  * them — unlike the round 3 spike's decorative mosaic, where tiles touch edge to edge. Large
@@ -404,4 +410,51 @@ export function hexSurfaceHeightAt(layout: HexOfficeLayout, x: number, z: number
 export function hexWallColliders(layout: HexOfficeLayout): Array<{ minX: number; maxX: number; minZ: number; maxZ: number }> {
   const half = HEX_WALL_THICKNESS / 2;
   return layout.rooms.flatMap((room) => hexWallSegments(room.center, room.radius, room.openEdges).map((segment) => segmentBounds(segment.a, segment.b, half)));
+}
+
+/** Halfway between the Hub's own center and one of its 6 corners, offset from its first open
+ * edge (the elevator/kitchen placement's own pattern, `HexRooms.ts`'s `buildHexOffice`). */
+function hubCornerAnchor(hub: HexRoomGeometry, cornerOffset: number): HexPoint {
+  const corner = hub.corners[(hub.openEdges[0]! + cornerOffset) % 6];
+  return { x: (hub.center.x + corner.x) / 2, z: (hub.center.z + corner.z) / 2 };
+}
+
+export interface HubFurnitureSpot {
+  position: HexPoint;
+  /** Faces this point (the Hub's own center, so a desk or idle spot always looks inward). */
+  lookAt: HexPoint;
+}
+
+/**
+ * The Hub's own fixed furniture layout (issue #260, step 7a part a: overflow past the hall's
+ * own desks/test stations/idle corner goes here instead of a rented room). The Hub never grows
+ * (round 7: "simplicity and beauty," a fixed open office), so this is a fixed count, not a plan
+ * that scales with agent count the way a war room's furniture does.
+ *
+ * Desks cluster at the two corners `buildHexOffice`'s own elevator (`+3`) and kitchen (`+2`)
+ * placements leave free (`+1` and `+4` from the Hub's first open edge, offset from `+2`/`+3` the
+ * same half-way-to-corner distance); idle spots ring the kitchen/play corner itself (`+2`), the
+ * "kitchen and play area where idle agents relax" round 7 asked for — no extra furniture mesh,
+ * just somewhere to stand near it.
+ */
+export function hubFurnitureSpots(hub: HexRoomGeometry): { desks: HubFurnitureSpot[]; idle: HubFurnitureSpot[] } {
+  const center = hub.center;
+  const desks: HubFurnitureSpot[] = [];
+  for (const cornerOffset of [1, 4]) {
+    const anchor = hubCornerAnchor(hub, cornerOffset);
+    const along = normalize({ x: -(anchor.z - center.z), z: anchor.x - center.x });
+    for (const spread of [-1.6, -0.5, 0.6, 1.7]) {
+      desks.push({
+        position: { x: anchor.x + along.x * spread, z: anchor.z + along.z * spread },
+        lookAt: center,
+      });
+    }
+  }
+  const kitchen = hubCornerAnchor(hub, 2);
+  const along = normalize({ x: -(kitchen.z - center.z), z: kitchen.x - center.x });
+  const idle: HubFurnitureSpot[] = [-1.4, -0.7, 0.7, 1.4].map((spread) => ({
+    position: { x: kitchen.x + along.x * spread + (center.x - kitchen.x) * 0.25, z: kitchen.z + along.z * spread + (center.z - kitchen.z) * 0.25 },
+    lookAt: center,
+  }));
+  return { desks, idle };
 }

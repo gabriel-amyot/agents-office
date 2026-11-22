@@ -179,7 +179,10 @@ test('real size, default isometric view at 1600x1000: every room label plate is 
   controller.refresh();
   scene.updateMatrixWorld();
   const labels = labelsIn(scene);
-  assert.equal(labels.length, 25);
+  // Issue #260 (step 7a): office + library + 9 mission rooms. The Hub and hex Office carry no
+  // room label of their own (only the rect office, the hex Library and every war room do); the
+  // retired 'desks'/'lab'/'lounge' overflow kinds used to add up to 14 more labels here.
+  assert.equal(labels.length, 11);
   const rects = labels.map((label) => ({ text: label.userData.roomLabel as string, rect: screenRect(label, camera) }));
   console.log(`room label plates: min ${Math.min(...rects.map((r) => r.rect.height)).toFixed(1)} px at zoom ${zoomDistance.toFixed(1)}`);
   for (const { text, rect } of rects) assert.ok(rect.height >= 22, `${text}: ${rect.height.toFixed(1)} px at zoom ${zoomDistance.toFixed(1)}`);
@@ -294,7 +297,7 @@ test('the sign list is collected once, and again after sceneChanged', () => {
 });
 
 test('rooms no longer carry the small door sign chip', () => {
-  const room = buildRoom('lab', slotFor(2), 2, []);
+  const room = buildRoom('library', slotFor(2), 2, []);
   const chips = room.group.children.filter((child) => child instanceof CSS2DObject && (child as CSS2DObject).element.classList.contains('room-sign'));
   assert.equal(chips.length, 0);
 });
@@ -346,21 +349,12 @@ test('the label controller applies the room label rule from the camera position'
   assert.equal(label.visible, true, 'always in the overview');
 });
 
-// --- AC4: lounge names ---
-
-test('lounges are numbered in the order they are rented', () => {
-  assert.equal(roomTitle('lounge', []), 'Lounge 1');
-  assert.equal(roomTitle('lounge', ['office', 'lounge', 'desks', 'lounge']), 'Lounge 3');
-  assert.equal(roomTitle('library', ['lounge']), 'Library');
-  assert.equal(roomTitle('desks', []), 'Desks');
-});
-
-test('three lounges in the building are named Lounge 1, Lounge 2 and Lounge 3', () => {
-  const { scene, layout, agent } = building();
-  for (let i = 0; i < 6 + 27; i++) layout.seatFor(agent(`idle-${i}`, 'idle'), null);
-  assert.equal(layout.roomKinds.filter((kind) => kind === 'lounge').length, 3);
-  const lounges = labelsIn(scene).map((label) => label.userData.roomLabel as string).filter((text) => text.startsWith('Lounge'));
-  assert.deepEqual(lounges, ['Lounge 1', 'Lounge 2', 'Lounge 3']);
+// Issue #260 (step 7a): 'lounge' and 'desks' are retired room kinds — idle and implementing
+// overflow both go to the hex Hub's own fixed spots instead of a numbered rented room.
+test('a later office is still numbered a waiting room', () => {
+  assert.equal(roomTitle('office', []), 'Your office');
+  assert.equal(roomTitle('office', ['office']), 'Waiting room 2');
+  assert.equal(roomTitle('library', ['office']), 'Library');
 });
 
 // --- AC2: door frames ---
@@ -396,11 +390,13 @@ test('a room door has a frame of two posts and a lintel in the room floor color'
 
 test('every doorway of the building has a frame, outer rings and war rooms included', () => {
   const { scene, layout, agent } = building();
-  // Fill the first ring and open an outer room (8 rooms). Issue #258: the Library no longer
-  // force-occupies a ring-0 slot (it is a hex room behind the hex Office now), so ring 0
-  // holds one more idle-capable lounge than before this step — it takes more idle agents to
-  // spill into an outer room than the old 6 + 9*6 did.
-  for (let i = 0; i < 70; i++) layout.seatFor(agent(`idle-${i}`, 'idle'), null);
+  // Fill the first ring and open an outer room (8 rooms). Issue #260: idle overflow no longer
+  // rents a 'lounge' room at all (the hex Hub's own kitchen/play corner absorbs it instead) —
+  // the only room kind that still grows past ring 0 is 'office' itself, once its own queue
+  // (~23 spots per room) fills past 7 rooms' worth of waiting agents.
+  for (let i = 0; i < 200; i++) {
+    layout.seatFor({ id: `q${i}`, activity: 'meeting', extras: { attention: 'waiting', waitMinutes: i } }, null);
+  }
   layout.syncWorldRooms([missionRoom('A'), missionRoom('B'), missionRoom('C')]);
   const roomCount = layout.roomKinds.length;
   assert.ok(roomCount >= 8, `an outer ring exists (${roomCount} rooms)`);
@@ -473,8 +469,8 @@ test('buildCeiling() makes a ceiling mesh at the given height, merged into the s
 test('every room\'s ceiling merges into one mesh, and toggling that merged mesh triggers no rebuild and ejects nothing (review, #184 round 2)', () => {
   const scene = new THREE.Scene();
   const library = buildRoom('library', slotFor(1), 1, []);
-  const desks = buildRoom('desks', slotFor(2), 2, []);
-  scene.add(library.group, desks.group);
+  const office2 = buildRoom('office', slotFor(2), 2, []);
+  scene.add(library.group, office2.group);
 
   const statics = new StaticBatch(scene);
   statics.update();

@@ -34,6 +34,7 @@ import {
   hexWallColliders,
   hexSurfaceHeightAt,
   hexRoomFrame,
+  hubFurnitureSpots,
   pointInPolygon,
   type HexOfficeLayout,
   type HexRoomGeometry,
@@ -45,6 +46,7 @@ import {
 } from './HexRoomPlanner.js';
 import type { HexPoint } from './HexPlanner.js';
 import { FIGURE_EYE_HEIGHT } from '../../characters/StickFigureParts.js';
+import { createDesk } from '../../furniture/Desk.js';
 
 /** A stone tone distinct from the rect building's own `Colors.wall`, so the two structures
  * read as separate at a glance in the isometric view. */
@@ -82,16 +84,15 @@ function orientedBox(from: THREE.Vector3, to: THREE.Vector3, crossA: number, cro
   return mesh;
 }
 
-/** A hex room's floor: a flat polygon fan from its center. Deliberately NOT tagged
- * `userData.floor` (unlike every rect room's floor): that tag feeds `overviewBounds`'
- * `floorUnder`, which unions every floor's world bounds into the isometric camera's default
- * pan/zoom limits. This structure sits `HEX_OFFSET` away from the rect building on purpose
- * (clear of its own growth); including it in those bounds by default zoomed the whole
- * isometric view out far enough to drop "Your office"'s label under the 22 px readability
- * floor (`tests/wayfinding.test.ts`) — a real regression for every existing room, not a cost
- * worth paying before this structure has its own reason to share the camera's default frame.
- * The structure is still fully reachable (`wallColliders`/`surfaceHeightAt` below) and its own
- * screenshot is taken by panning/zooming there deliberately, not by the default view. */
+/** A hex room's floor: a flat polygon fan from its center. Tagged `userData.floor` (issue
+ * #260, step 7a part c): that tag feeds `overviewBounds`'s `floorBounds`, which unions every
+ * floor's world bounds into the isometric camera's default pan/zoom limits. Step 2 deliberately
+ * left this untagged while `HEX_OFFSET` sat 360 units from the rect building — it zoomed the
+ * default view out far enough to drop "Your office"'s label under the 22 px readability floor
+ * (`tests/wayfinding.test.ts`). Now that the hex structure sits just outside the rect hall
+ * (`HEX_OFFSET`, step 7a part b), the default isometric overview should show the whole
+ * building, rect lobby and hex wings together, not just one or the other; the real-size
+ * label-readability test is what actually proves the margin still holds. */
 function buildHexFloor(room: HexRoomGeometry, color: number): THREE.Mesh {
   const positions: number[] = [];
   for (let i = 0; i < 6; i++) {
@@ -110,6 +111,7 @@ function buildHexFloor(room: HexRoomGeometry, color: number): THREE.Mesh {
   const mesh = new THREE.Mesh(geometry, getToonMaterial(color));
   mesh.name = 'hex-floor';
   mesh.receiveShadow = true;
+  mesh.userData.floor = true;
   return mesh;
 }
 
@@ -203,6 +205,11 @@ export interface BuiltHexOffice {
   layout: HexOfficeLayout;
   wallColliders: WallRect[];
   surfaceHeightAt(x: number, z: number): number | null;
+  /** Issue #260 (step 7a part a): the Hub's own fixed open-office stations — a spare desk
+   * (type `implementing`) per spot, and an idle spot near the kitchen/play corner, for
+   * `BuildingLayout.ts` to register once, same as the hex Library's own stations. */
+  hubDeskSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
+  hubIdleSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
   /** `#room=hub` / `#room=hex-office` (issue #242 review). Unknown names return null, the
    * same contract `BuildingLayout.roomView` already keeps for a rect room. */
   roomView(name: string): { bounds: THREE.Box3; standing: { position: THREE.Vector3; lookAt: THREE.Vector3 }; kind?: string } | null;
@@ -268,6 +275,38 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
   accents.add(kitchen);
   group.add(accents);
 
+  // Issue #260 (step 7a part a): the Hub's own fixed open-office capacity — spare desks for a
+  // session with no mission, once the hall's own desks are full. One real furniture-library
+  // piece per desk (not a placeholder, unlike the elevator/kitchen accents above: a desk is
+  // where an agent visibly sits and works, so it needs to read as a desk up close), merged into
+  // its own zone — one draw call for however many spare desks the Hub carries.
+  const hubFurniture = hubFurnitureSpots(layout.hub);
+  const hubDesks = new THREE.Group();
+  hubDesks.name = 'hex-hub-desks';
+  markStatic(hubDesks, { zone: 'hex-hub-desks', castShadow: false });
+  const hubDeskSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }> = [];
+  for (const spot of hubFurniture.desks) {
+    const desk = createDesk(true);
+    desk.position.set(spot.position.x, 0, spot.position.z);
+    desk.lookAt(spot.lookAt.x, 0, spot.lookAt.z);
+    hubDesks.add(desk);
+    // `Desk.ts`'s monitor sits on the local -Z side (`Office.ts`'s own desk stations: the agent
+    // sits at `z + 0.7`, looking toward the monitor at `z - 0.15`); `lookAt` above turns -Z to
+    // face the Hub's own center, so +Z (the seated side) now faces away from it — the same
+    // "agent sits further out, facing in toward the monitor" shape every hall desk already has.
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(desk.quaternion);
+    hubDeskSpots.push({
+      position: desk.position.clone().addScaledVector(forward, 0.7),
+      lookAt: desk.position.clone().addScaledVector(forward, -0.15).setY(1.2),
+    });
+  }
+  group.add(hubDesks);
+
+  const hubIdleSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }> = hubFurniture.idle.map((spot) => ({
+    position: new THREE.Vector3(spot.position.x, 0, spot.position.z),
+    lookAt: new THREE.Vector3(spot.lookAt.x, 1.0, spot.lookAt.z),
+  }));
+
   // Issue #258 review (the floor-library plugin's NPC/shelves went dark the moment the rect
   // library room they keyed off, `room-N-library`, was deleted): an invisible, zero-geometry
   // marker, found by name the same way that plugin already finds a rect room, carrying the
@@ -310,6 +349,8 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     layout,
     wallColliders: hexWallColliders(layout),
     surfaceHeightAt: (x: number, z: number) => hexSurfaceHeightAt(layout, x, z),
+    hubDeskSpots,
+    hubIdleSpots,
     roomView: (name: string) => {
       const query = name.trim().toLowerCase();
       if (query === 'hub') return hexRoomView(layout.hub);
