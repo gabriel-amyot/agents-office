@@ -15,7 +15,18 @@ import type { HairStyle } from './StickFigureParts.js';
  * length, or every agent would mint its own bucket.
  */
 
-const HAIR_STYLES: HairStyle[] = ['tufts', 'spiky', 'bun', 'none'];
+/**
+ * The seed table (issue #215, party round 7, unanimous): `bun`'s dome read as the "cap"
+ * shape Gabriel disliked ("the hairs... look like little caps"), removed from the real
+ * `HairStyle` type and from `StickFigureParts.ts`'s `createHair` (frees its 2 draw-call
+ * buckets, `hair:bun-base`/`hair:bun-knot` — once nothing ever asks `createHair` for
+ * `'bun'`, those shared geometries are never built in the first place). This table itself,
+ * and the index math below, stay at the original 4 slots on purpose: shrinking the table to
+ * 3 and re-deriving every index would reshuffle every OTHER agent's own seeded style too,
+ * not just the names that used to land on `bun`'s own slot. `hairStyleFor` redirects only
+ * that one slot, to the table's own next entry (`'none'`, today).
+ */
+const HAIR_STYLES: ReadonlyArray<HairStyle | 'bun'> = ['tufts', 'spiky', 'bun', 'none'];
 
 /** The narrow range a scaled figure still fits its desk, chair and doorway. */
 const MIN_BODY_SCALE = 0.92;
@@ -35,9 +46,13 @@ function seededFraction(name: string, draw: number): number {
   return fnv1a(`${name}:${draw}`) / 0xffffffff;
 }
 
-/** One of 4 hair styles ('none' included), stable for one agent name for its whole lifetime. */
+/** One of 3 hair styles ('none' included), stable for one agent name for its whole lifetime. */
 export function hairStyleFor(name: string): HairStyle {
-  return HAIR_STYLES[Math.floor(seededFraction(name, 0) * HAIR_STYLES.length) % HAIR_STYLES.length];
+  const index = Math.floor(seededFraction(name, 0) * HAIR_STYLES.length) % HAIR_STYLES.length;
+  const seeded = HAIR_STYLES[index];
+  if (seeded !== 'bun') return seeded;
+  // Only one slot in the table is ever 'bun', so its own next neighbor can never be 'bun' again.
+  return HAIR_STYLES[(index + 1) % HAIR_STYLES.length] as HairStyle;
 }
 
 /** A small per-agent width multiplier (root scale.x/z, issue #165 round 2: "hair + body-shape variety"). */

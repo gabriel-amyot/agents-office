@@ -70,7 +70,8 @@ export const HEAD_OFFSET = HEAD_RADIUS;
 export const FIGURE_EYE_HEIGHT = NECK_HEIGHT + HEAD_OFFSET;
 
 export type FaceState = 'neutral' | 'focused' | 'waiting';
-export type HairStyle = 'tufts' | 'spiky' | 'bun' | 'none';
+/** Issue #215 (party round 7, unanimous): `bun` removed — the dome read as the "cap" shape Gabriel disliked. `HeroVariety.ts`'s `hairStyleFor` redirects a name that used to land on it to the table's own next entry, never reshuffling any other name's own seeded style. */
+export type HairStyle = 'tufts' | 'spiky' | 'none';
 
 // Every figure shares one geometry per part shape, so the figure batch draws all
 // figures' parts of one shape and color in one call (src/characters/FigureBatch.ts).
@@ -245,13 +246,6 @@ function createHair(style: HairStyle): THREE.Group | null {
         const r = HEAD_RADIUS * 0.5;
         addPiece(geometry, [Math.cos(angle) * r, HEAD_RADIUS * 0.8, Math.sin(angle) * r * 0.6 - HEAD_RADIUS * 0.1], [-0.4, -angle, 0]);
       }
-      break;
-    }
-    case 'bun': {
-      const base = shared('hair:bun-base', () => new THREE.SphereGeometry(HEAD_RADIUS * 1.03, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.4));
-      addPiece(base, [0, HEAD_RADIUS * 0.2, 0]);
-      const knot = shared('hair:bun-knot', () => new THREE.SphereGeometry(HEAD_RADIUS * 0.3, 8, 8));
-      addPiece(knot, [0, HEAD_RADIUS * 1.05, -HEAD_RADIUS * 0.45]);
       break;
     }
   }

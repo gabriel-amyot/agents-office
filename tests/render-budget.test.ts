@@ -201,13 +201,18 @@ test('with 5 issue cards on each of the 40 agents the frame stays under the draw
   // a 5th call), the walkway deck plus both stair ramps (1 material), and the Hub's placeholder
   // elevator/kitchen/play corner (1 material). None of the new geometry casts a shadow, so
   // this is a main-pass-only cost. Applied on top of the 405 baseline (#244's board merge and
-  // #165 round 7's hair-bucket recovery, see above), landing it at 409. New pin: 412, 3 points
-  // of headroom left against the 430 cap — not free money: the budget rule from issue #217 is
-  // that every later step which adds hex geometry pays for itself by deleting the rect-building
-  // code it replaces in the same PR (step 4 deletes the rect library's room path, step 5
-  // deletes the mission corridor), so this never needs a cap raise before step 7 deletes the
-  // legacy rect system outright.
-  assert.ok(after.total <= 412, `worst case ${after.total} exceeds the pinned baseline (409, issue #218 steps 2/3) + 3`);
+  // #165 round 7's hair-bucket recovery, see above), landing it at 409.
+  // Issue #215 (party round 7, unanimous: the 'bun' dome read as the "cap" shape Gabriel
+  // disliked) removes 'bun' from the hair style table entirely, not just redirecting a name
+  // that used to hash to it — this fixture's 40 seeded names included at least one that used
+  // to land on 'bun', so `hair:bun-base`/`hair:bun-knot` are never built for it now, freeing
+  // both of that style's own shared buckets. Applied on top of 409, landing it at 407, not a
+  // hand-picked 2 off. New pin: 410, 3 points of headroom left against the 430 cap — not free
+  // money: the budget rule from issue #217 is that every later step which adds hex geometry
+  // pays for itself by deleting the rect-building code it replaces in the same PR (step 4
+  // deletes the rect library's room path, step 5 deletes the mission corridor), so this never
+  // needs a cap raise before step 7 deletes the legacy rect system outright.
+  assert.ok(after.total <= 410, `worst case ${after.total} exceeds the pinned baseline (407, issue #215) + 3`);
 });
 
 test('the worst case measures the same total every run: the fixture\'s one random draw is seeded (issue #128 review round 2)', () => {
@@ -269,7 +274,11 @@ test('the worst case measures the same total every run: the fixture\'s one rando
   // up to 16 of them, before this step), freeing every one of their own room-zone draw calls;
   // the hex Hub's own new spare-desk furniture (`hex-hub-desks`, one merged zone regardless of
   // how many desks it holds) adds exactly 1 back. Net measured: -6, landing at 379.
-  assert.deepEqual([...totals], [379], `expected every one of 8 runs to measure 379, got ${[...totals]}`);
+  // Issue #215 (bun hair style removed entirely, see the baseline comment above, merged in from
+  // a parallel branch) frees both of its own shared buckets on top of that — re-measured with
+  // both changes together, not a hand-picked 379 - 2, since the fixture's own hair-bucket mix
+  // is not guaranteed to combine additively with every other change already landed.
+  assert.deepEqual([...totals], [377], `expected every one of 8 runs to measure 377, got ${[...totals]}`);
 });
 
 test('the merge keeps every visible furniture triangle: merged vertices equal the source vertices', () => {
