@@ -257,6 +257,13 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     walkway.add(orientedBox(v3(connection.childRamp.from, 0), v3(connection.childRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
     walkway.add(orientedBox(v3(connection.parentRamp.to, WALKWAY_HEIGHT), v3(connection.childRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
   }
+  // Issue #260 (step 7a part b): the Hub's own short walkway out to the rect hall — up at the
+  // Hub's own open edge, flat across, down at the hall's own door. Shares this zone, so it costs
+  // nothing extra (the budget rule in issue #217: new hex geometry pays for itself).
+  const { hubRamp, deck: hallDeck, hallRamp } = layout.hallConnector;
+  walkway.add(orientedBox(v3(hubRamp.from, 0), v3(hubRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
+  walkway.add(orientedBox(v3(hallDeck.from, WALKWAY_HEIGHT), v3(hallDeck.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
+  walkway.add(orientedBox(v3(hallRamp.from, WALKWAY_HEIGHT), v3(hallRamp.to, 0), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
   group.add(walkway);
 
   const accents = new THREE.Group();

@@ -14,6 +14,13 @@ import {
 } from './HexPlanner.js';
 export type { ComponentRole, RoomRole } from './HexPlanner.js';
 import { OFFICE } from '../../utils/Constants.js';
+import { HALL } from './RoomPlanner.js';
+
+/** The rect hall's own north wall midpoint (issue #260, step 7a part b): the one side
+ * `RoomPlanner.ts`'s `FIRST_RING` never docks a rented room onto (it only ever grows east,
+ * south and west) — the hall's one permanently clear wall, so the Hub's own connector never
+ * has to fight a rented room for the same opening. */
+const HALL_CONNECTOR_DOOR: HexPoint = { x: (HALL.minX + HALL.maxX) / 2, z: HALL.minZ };
 
 /** World offset of the whole hex structure, clear of the existing rect building (whose rooms
  * grow outward from the origin in every direction) so the two coexist without touching, per
@@ -264,6 +271,21 @@ export interface HexConnection {
  * meshes and colliders. `hub`/`office`/`library` and the four named ramps stay as a
  * convenience (every caller from steps 2-4 already reads them by name); `rooms`/`connections`
  * generalize over however many wing rooms also exist. */
+/**
+ * The Hub's own short walkway out to the rect building (issue #260, step 7a part b: "one short
+ * walkway or open passage from the hall to the hub" — the two structures used to sit 360 units
+ * apart with no route between them at all). The same 3-piece shape every room-to-room
+ * `HexConnection` already uses (up, flat, down), just with the rect hall's own north wall
+ * standing in for a second hex room: `hubRamp` climbs from the Hub's own open edge to
+ * `WALKWAY_HEIGHT`, `deck` runs flat, `hallRamp` comes back down to the hall's own floor height
+ * right at its door.
+ */
+export interface HallConnector {
+  hubRamp: HexWalkway;
+  deck: HexWalkway;
+  hallRamp: HexWalkway;
+}
+
 export interface HexOfficeLayout {
   rooms: HexRoomGeometry[];
   connections: HexConnection[];
@@ -275,6 +297,7 @@ export interface HexOfficeLayout {
   /** The office's own stair toward the library (its second open edge). */
   officeLibraryRamp: HexWalkway;
   libraryRamp: HexWalkway;
+  hallConnector: HallConnector;
 }
 
 /** How many more hex rooms each component wing (and the Library) should grow to, this build —
@@ -299,6 +322,26 @@ function rampToward(center: HexPoint, radius: number, toward: HexPoint): { openE
   const edgeMid = edgeMidpoint(center, radius, openEdge);
   const outward = normalize(sub(edgeMid, center));
   return { openEdge, ramp: { from: edgeMid, to: add(edgeMid, scale(outward, RAMP_LENGTH)) } };
+}
+
+/**
+ * The Hub's own walkway out to the rect hall (issue #260, step 7a part b). `rampToward` already
+ * finds the nearest edge and the first `RAMP_LENGTH` stretch of the climb; this just continues
+ * flat from there, at `WALKWAY_HEIGHT`, to a point `RAMP_LENGTH` short of the hall's own door,
+ * then comes back down to the hall's own floor height right at it — the same up/flat/down shape
+ * a plain `HexConnection` already has, with the hall's door standing in for a second room's own
+ * edge midpoint.
+ */
+function hallConnectorFor(hub: HexRoomGeometry): HallConnector {
+  const { openEdge, ramp: hubRamp } = rampToward(hub.center, hub.radius, HALL_CONNECTOR_DOOR);
+  hub.openEdges.push(openEdge);
+  const down = normalize(sub(HALL_CONNECTOR_DOOR, hubRamp.to));
+  const deckEnd = add(HALL_CONNECTOR_DOOR, scale(down, -RAMP_LENGTH));
+  return {
+    hubRamp,
+    deck: { from: hubRamp.to, to: deckEnd },
+    hallRamp: { from: deckEnd, to: HALL_CONNECTOR_DOOR },
+  };
 }
 
 function requestsFor(counts: HexWorldCounts): GrowthRequest[] {
@@ -369,6 +412,7 @@ export function buildHexWorld(counts: HexWorldCounts): HexOfficeLayout {
   const library = byRole('library');
   const hubOffice = connectionBetween(hub, office);
   const officeLibrary = connectionBetween(office, library);
+  const hallConnector = hallConnectorFor(hub);
 
   return {
     rooms: roomList,
@@ -378,6 +422,7 @@ export function buildHexWorld(counts: HexWorldCounts): HexOfficeLayout {
     officeRamp: hubOffice.childRamp,
     officeLibraryRamp: officeLibrary.parentRamp,
     libraryRamp: officeLibrary.childRamp,
+    hallConnector,
   };
 }
 
@@ -403,6 +448,16 @@ export function hexSurfaceHeightAt(layout: HexOfficeLayout, x: number, z: number
     const onDeck = segmentHeightAt(point, connection.parentRamp.to, connection.childRamp.to, WALKWAY_WIDTH, WALKWAY_HEIGHT, WALKWAY_HEIGHT);
     if (onDeck !== null) return onDeck;
   }
+  // Issue #260 (step 7a part b): the Hub's own short walkway out to the rect hall — the same
+  // up/flat/down shape as a room-to-room connection, just ending at the hall's own door instead
+  // of a second hex room.
+  const { hubRamp, deck, hallRamp } = layout.hallConnector;
+  const onHubRamp = segmentHeightAt(point, hubRamp.from, hubRamp.to, WALKWAY_WIDTH, 0, WALKWAY_HEIGHT);
+  if (onHubRamp !== null) return onHubRamp;
+  const onHallDeck = segmentHeightAt(point, deck.from, deck.to, WALKWAY_WIDTH, WALKWAY_HEIGHT, WALKWAY_HEIGHT);
+  if (onHallDeck !== null) return onHallDeck;
+  const onHallRamp = segmentHeightAt(point, hallRamp.from, hallRamp.to, WALKWAY_WIDTH, WALKWAY_HEIGHT, 0);
+  if (onHallRamp !== null) return onHallRamp;
   return null;
 }
 

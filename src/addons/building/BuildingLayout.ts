@@ -66,6 +66,13 @@ function isLibrarian(extras: LayoutAgent['extras']): boolean {
   return Array.isArray(extras?.badges) && extras.badges.includes('librarian');
 }
 
+/** The hall's own permanent opening onto the hex Hub's walkway (issue #260, step 7a part b):
+ * the hall's north wall, the one side `RoomPlanner.ts`'s `FIRST_RING` never docks a rented room
+ * onto, matching `HexRoomPlanner.ts`'s own `HALL_CONNECTOR_DOOR` (the same world point, the
+ * hall's own north wall midpoint) — never conditional on any room being rented, unlike every
+ * other hall door. */
+const HALL_CONNECTOR_DOOR: Door = { side: 'north', at: 0 };
+
 export const BUILDING_STORAGE_KEY = 'agents-office.building.rooms';
 /** Marks the one-time legacy-rooms migration as done (issue #191, `migrateLegacyRooms`), so it
  * never runs a second time no matter which floor is focused afterward. */
@@ -484,7 +491,7 @@ export class BuildingLayout implements LayoutStrategy {
    * room exists, which `setWallColliders([])` already treats as unobstructed.
    */
   wallColliders(): WallRect[] {
-    const hallDoors = this.rooms.map((room) => slotFor(room.index)).filter((slot) => slot.ring === 0).map(matchingDoor);
+    const hallDoors = [HALL_CONNECTOR_DOOR, ...this.rooms.map((room) => slotFor(room.index)).filter((slot) => slot.ring === 0).map(matchingDoor)];
     const colliders: WallRect[] = [...wallRects(HALL, hallDoors)];
     for (const record of this.rooms) {
       const slot = slotFor(record.index);
@@ -898,10 +905,11 @@ export class BuildingLayout implements LayoutStrategy {
 
   private rebuildHallWalls(): void {
     if (this.hallWalls) this.scene.remove(this.hallWalls);
-    // Issue #259: the mission wing is a separate hex structure now, with no door into the hall
-    // at all (its own entrance is the Hub, reached by its own means) — the hall's doors are
-    // only ever its ring-0 rented rooms.
-    const doors = this.rooms.map((room) => slotFor(room.index)).filter((slot) => slot.ring === 0).map(matchingDoor);
+    // Issue #260 (step 7a part b): the hall's one permanent opening onto the hex Hub's own
+    // walkway, always present, not conditional on a rented room. Issue #259: besides that, the
+    // mission wing is a separate hex structure, reached only through the Hub — the rest of the
+    // hall's doors are only ever its ring-0 rented rooms.
+    const doors = [HALL_CONNECTOR_DOOR, ...this.rooms.map((room) => slotFor(room.index)).filter((slot) => slot.ring === 0).map(matchingDoor)];
     this.hallWalls = buildWalls(HALL, doors, OFFICE.height, ['south', 'west']);
     this.hallWalls.name = 'building-hall-walls';
     // Its own zone: the overview lowers the hall walls like the room walls

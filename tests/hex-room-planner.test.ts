@@ -82,11 +82,13 @@ test('a full walk from the hub floor, up its ramp, across the deck, down the off
   }
 });
 
-test('wallColliders: the hub and library each contribute 5 wall segments, the office 4 (its two stairs leave two edges open)', () => {
+test('wallColliders: the library contributes 5 wall segments, the office 4, the hub 4 (issue #260: the hall connector is a second open edge)', () => {
   const layout = buildHexOfficeLayout();
   const colliders = hexWallColliders(layout);
-  // Issue #258: hub (5) + office (4, two open edges: hub and library) + library (5) = 14.
-  assert.equal(colliders.length, 14);
+  // Issue #258: office (4, two open edges: hub and library) + library (5) = 9. Issue #260
+  // (step 7a part b): the hub now has two open edges too (the office stair and the hall
+  // connector), so it drops from 5 to 4 as well — 9 + 4 = 13.
+  assert.equal(colliders.length, 13);
 });
 
 test('wallColliders: no wall blocks either ramp\'s own doorway point', () => {
