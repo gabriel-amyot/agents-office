@@ -24,6 +24,7 @@
  * furnishing pass.
  */
 import * as THREE from 'three';
+import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { getToonMaterial } from '../../utils/Materials.js';
 import { markStatic } from '../../scene/StaticMerge.js';
 import type { WallRect } from '../../layout/LayoutStrategy.js';
@@ -47,6 +48,8 @@ import {
 import type { HexPoint } from './HexPlanner.js';
 import { FIGURE_EYE_HEIGHT } from '../../characters/StickFigureParts.js';
 import { createDesk } from '../../furniture/Desk.js';
+import { hexOfficeFrame, HEX_OFFICE_DESK } from './hexDeskGeometry.js';
+import { QUEUE_COUNT_SIGN } from './rooms.js';
 
 /** A stone tone distinct from the rect building's own `Colors.wall`, so the two structures
  * read as separate at a glance in the isometric view. */
@@ -200,6 +203,71 @@ export function hexRoomView(room: HexRoomGeometry, kind?: string): { bounds: THR
   return { bounds, standing: { position, lookAt }, ...(kind ? { kind } : {}) };
 }
 
+function signElement(text: string): CSS2DObject {
+  const element = document.createElement('div');
+  element.className = 'desk-sign';
+  element.textContent = text;
+  Object.assign(element.style, {
+    background: 'rgba(30, 32, 48, 0.85)', color: '#f5f0e8', padding: '2px 8px', borderRadius: '4px',
+    font: '600 12px system-ui, sans-serif', whiteSpace: 'nowrap', pointerEvents: 'none',
+  });
+  return new CSS2DObject(element);
+}
+
+/**
+ * Issue #260 step 7b, step 2: the hex Office's own desk and chair, built side by side with the
+ * rect office's furniture (which keeps working, unconverted, until step 3 switches
+ * `BuildingLayout`'s queue/desk-view/desk-talk-spot over and deletes the rect system outright).
+ * `createDesk(false)`: no stock monitor (same reason the rect office's own desk drops it,
+ * `furnishing.ts`'s `usersOffice` branch) — the hex office's own 2 small monitors are
+ * `deskMonitors.ts`'s job once step 3 repoints that extension at this desk instead of building
+ * a second, disconnected pair here. The chair is named `'desk-chair'` (`Desk.ts`'s own
+ * convention) so `BuildingLayout`'s existing visibility toggle (issue #243, "hide the chair
+ * while in desk mode") finds this one too, once step 3 wires it up.
+ *
+ * The "You" sign and the (initially hidden) queue-count sign reuse `rooms.ts`'s own CSS2D
+ * styling and `QUEUE_COUNT_SIGN` name, so `BuildingLayout`'s existing sign-update code (which
+ * already looks up `QUEUE_COUNT_SIGN` by name) finds this one too without a hex-specific branch.
+ */
+export function buildHexOfficeDesk(layout: HexOfficeLayout): THREE.Group {
+  const frame = hexOfficeFrame(layout);
+  const group = new THREE.Group();
+  group.name = 'hex-office-desk';
+  // One desk's own few materials (top, legs, chair seat/back, chair pole/base) would each cost
+  // their own draw call as separate `Mesh`es (three.js never auto-batches by shared material);
+  // the same `markStatic` merge every other hex zone already uses collapses them to one draw
+  // call per material regardless of how many pieces share it — here, as everywhere else in
+  // this file, that is a handful of calls total, not "zero", but still bounded and small.
+  // `castShadow: false`, matching every other hex zone (this file's own top-of-file note: the
+  // structure sits far from the rect hall's 3 shadow-casting ceiling lights, so a cast shadow
+  // here buys nothing for 3x the draw-call cost — confirmed by measurement: `castShadow: true`
+  // alone added 13 calls to the render-budget fixture, `false` added only the material count).
+  markStatic(group, { zone: 'hex-office-desk', castShadow: false });
+
+  const desk = createDesk(false);
+  desk.position.copy(frame.point(HEX_OFFICE_DESK.a, HEX_OFFICE_DESK.d));
+  // `frame.faceDoor` already points a piece toward the door (the Hub); the desk's own front
+  // (where the chair sits, `Desk.ts`'s `+z`) should instead face away from the door, toward the
+  // queue approaching from it — the same `FACE_AWAY` convention `furnishing.ts`'s rect office
+  // plan uses for its own desk.
+  desk.rotation.y = frame.faceAway;
+  desk.castShadow = true;
+  group.add(desk);
+
+  const you = signElement('You');
+  you.position.copy(frame.point(HEX_OFFICE_DESK.a, HEX_OFFICE_DESK.d + 0.7, 2.2));
+  group.add(you);
+
+  const queueCount = signElement('');
+  queueCount.name = QUEUE_COUNT_SIGN;
+  queueCount.userData.queueCount = 0;
+  queueCount.visible = false;
+  queueCount.position.copy(frame.point(HEX_OFFICE_DESK.a, HEX_OFFICE_DESK.d + 0.7, 2.5));
+  group.add(queueCount);
+
+  return group;
+}
+
 export interface BuiltHexOffice {
   group: THREE.Group;
   layout: HexOfficeLayout;
@@ -337,6 +405,11 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     minZ: Math.min(...libraryZs), maxZ: Math.max(...libraryZs),
   };
   group.add(libraryMarker);
+
+  // Issue #260 step 7b, step 2: the hex Office's own desk, chair and signs — side by side with
+  // the rect office's, not wired to the real queue/desk-view/desk-talk-spot yet (step 3's job).
+  const officeDesk = buildHexOfficeDesk(layout);
+  group.add(officeDesk);
 
   // Issue #242 review (root cause of the "very dark" finding): the scene's only real light
   // sources are 3 fixed ceiling spotlights over the rect hall (`SceneSetup.ts`'s

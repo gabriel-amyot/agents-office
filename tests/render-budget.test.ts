@@ -277,8 +277,16 @@ test('the worst case measures the same total every run: the fixture\'s one rando
   // Issue #215 (bun hair style removed entirely, see the baseline comment above, merged in from
   // a parallel branch) frees both of its own shared buckets on top of that — re-measured with
   // both changes together, not a hand-picked 379 - 2, since the fixture's own hair-bucket mix
-  // is not guaranteed to combine additively with every other change already landed.
-  assert.deepEqual([...totals], [377], `expected every one of 8 runs to measure 377, got ${[...totals]}`);
+  // is not guaranteed to combine additively with every other change already landed. Landing
+  // at 377.
+  // Issue #260 step 7b, step 2: the hex Office's own desk and chair (`HexRooms.ts`'s
+  // `buildHexOfficeDesk`, built side by side with the rect office's, not wired to the real
+  // queue yet) add 4 merged draw calls — one per material (desk top, desk legs, chair
+  // seat/back, chair pole/base), `castShadow: false` like every other hex zone (measured:
+  // `true` cost 13 calls instead, the 3 shadow-casting ceiling lights each re-drawing every
+  // merged mesh again — not worth it for geometry far from them). The "You" and queue-count
+  // signs are CSS2D, free. Net measured: +4, landing at 381.
+  assert.deepEqual([...totals], [381], `expected every one of 8 runs to measure 381, got ${[...totals]}`);
 });
 
 test('the merge keeps every visible furniture triangle: merged vertices equal the source vertices', () => {
