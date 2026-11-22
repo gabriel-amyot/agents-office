@@ -37,6 +37,7 @@ import {
   hexRoomFrame,
   hubFurnitureSpots,
   hubToolCribSpot,
+  cribStandSpots,
   pointInPolygon,
   type HexOfficeLayout,
   type HexRoomGeometry,
@@ -295,6 +296,8 @@ export interface BuiltHexOffice {
   /** Issue #260 step 7b item 4: the Hub's own fixed test stations — the rect hall's two test
    * stations (`Office.ts`'s `test_0`/`test_1`) had no hex home at all until now. */
   hubTestSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
+  /** Issue #227: the tool crib's own standing ring, in world space (`HexRoomPlanner.cribStandSpots`). */
+  cribStandSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
   /** `#room=hub` / `#room=hex-office` (issue #242 review). Unknown names return null, the
    * same contract `BuildingLayout.roomView` already keeps for a rect room. */
   roomView(name: string): { bounds: THREE.Box3; standing: { position: THREE.Vector3; lookAt: THREE.Vector3 }; kind?: string } | null;
@@ -367,6 +370,14 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
   toolCrib.lookAt(layout.hub.center.x, 0, layout.hub.center.z);
   accents.add(toolCrib);
   group.add(accents);
+
+  // Issue #227: the crib's own standing ring, in world space — `BuildingLayout` hands this
+  // straight through as `toolCribSpots()`, so the skills equipment plugin can walk an agent to
+  // one of these before it shows a newly loaded skill's item.
+  const cribStands: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }> = cribStandSpots(layout.hub).map((spot) => ({
+    position: new THREE.Vector3(spot.x, 0, spot.z),
+    lookAt: new THREE.Vector3(cribSpot.x, 0, cribSpot.z),
+  }));
 
   // Issue #260 (step 7a part a): the Hub's own fixed open-office capacity — spare desks for a
   // session with no mission, once the hall's own desks are full. One real furniture-library
@@ -471,6 +482,7 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     hubDeskSpots,
     hubIdleSpots,
     hubTestSpots,
+    cribStandSpots: cribStands,
     roomView: (name: string) => {
       const query = name.trim().toLowerCase();
       if (query === 'hub') return hexRoomView(layout.hub);

@@ -21,6 +21,7 @@ import { createMissionsBoard, placeMissionsBoard, type MissionBoardEntry } from 
 import { buildHexOffice, hexRoomView, type BuiltHexOffice } from './HexRooms.js';
 import { hubOverflowIdleSpot, libraryOverflowResearchingSpot, officeOverflowQueueSpot, pointInPolygon, type ComponentRole, type HexWorldCounts } from './HexRoomPlanner.js';
 import { componentForWing } from './componentWing.js';
+import { byRecencyNewestFirst } from './missionRecency.js';
 
 /**
  * Work that happens at the agent's own desk. Everything else is a trip. Planning,
@@ -169,6 +170,12 @@ export class BuildingLayout implements LayoutStrategy {
    * `componentForWing` deciding which wing (issue #261 review round 3: a mission's own
    * `component` field first, `componentForRepo` the fallback). */
   private missionWingCounts: HexWorldCounts = { library: 1, portal: 0, agents: 0, tooling: 0, infra: 0 };
+  /** Issue #225: whether `syncWorldRooms` has already placed at least one batch of rooms this
+   * instance's whole lifetime — `false` only across this `BuildingLayout`'s very first call,
+   * the one that corresponds to a fresh page load (a new instance, never reused across a
+   * reload). Reorders newest-first only then; every later call (a mission opening while the
+   * office is already running) appends in arrival order, no live reflow. */
+  private hasSyncedWorldRoomsOnce = false;
   private now: () => number;
   private wallClock: () => number;
   private dwellMs: number;
@@ -370,6 +377,21 @@ export class BuildingLayout implements LayoutStrategy {
       if (known) known.update(room);
     }
     if (newRooms.length > 0) {
+      // Issue #225 (party round 7, unanimous decision): cells stay fixed and append-only
+      // (`claimHexRegion` never moves a claimed cell, `HexRoomPlanner.buildHexWorld`'s own
+      // doc comment) — only which mission gets which already-claimed cell is re-sorted, and
+      // only on reload (`isReload`: this is the very first `syncWorldRooms` call this
+      // `BuildingLayout` instance ever makes, the same "fresh page load" boundary the
+      // constructor's own `rebuildHexOffice` call sits on). Sorting each wing's new claims
+      // newest-first before tallying ordinals lands the newest mission in the nearest free
+      // cell (ring order fills outward in claim order) and an idle one farther out — exactly
+      // Gabriel's round-5 ask. A live session's own new mission (`isReload` false here) still
+      // just appends outward in arrival order: no live reflow (AC3), an already-placed room
+      // never moves mid-session, only the next reload re-sorts again.
+      const isReload = !this.hasSyncedWorldRoomsOnce;
+      this.hasSyncedWorldRoomsOnce = true;
+      const orderedNewRooms = isReload ? [...newRooms].sort(byRecencyNewestFirst) : newRooms;
+
       // Issue #259: a new mission's wing (`componentForRepo`) grows by exactly one room, in the
       // order its own mission first appears here — the wing's own N-th claimed hex cell, never
       // reassigned once claimed (`HexRoomPlanner.buildHexWorld`'s own append-only guarantee).
@@ -379,14 +401,14 @@ export class BuildingLayout implements LayoutStrategy {
       // be pure waste.
       const wingOf = new Map<string, ComponentRole>();
       const ordinalOf = new Map<string, number>();
-      for (const room of newRooms) {
+      for (const room of orderedNewRooms) {
         const wing = componentForWing(room);
         wingOf.set(room.id, wing);
         this.missionWingCounts = { ...this.missionWingCounts, [wing]: this.missionWingCounts[wing] + 1 };
         ordinalOf.set(room.id, this.missionWingCounts[wing] - 1);
       }
       this.rebuildHexOffice();
-      for (const room of newRooms) {
+      for (const room of orderedNewRooms) {
         const wing = wingOf.get(room.id)!;
         const hexRoom = this.hexOffice.layout.rooms.filter((candidate) => candidate.role === wing)[ordinalOf.get(room.id)!]!;
         const index = this.missionRooms.size;
@@ -540,6 +562,11 @@ export class BuildingLayout implements LayoutStrategy {
    */
   surfaceHeightAt(x: number, z: number): number {
     return this.hexOffice.surfaceHeightAt(x, z) ?? 0;
+  }
+
+  /** Issue #227: the tool crib's own standing ring, straight from the hex structure. */
+  toolCribSpots(): Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }> {
+    return this.hexOffice.cribStandSpots;
   }
 
   seatFor(agent: LayoutAgent, previous: Activity | null): Seat | null {

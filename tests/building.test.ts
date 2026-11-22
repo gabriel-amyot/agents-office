@@ -1227,3 +1227,68 @@ test('a station still held by an agent stays occupied across a wing rebuild (rev
   const secondIdle = layout.seatFor(agent('idle-holder-2', 'idle'), null)!;
   assert.notEqual(secondIdle.key, idleAgent.key, 'the first idle agent\'s station must still read occupied after the rebuild');
 });
+
+// --- Issue #225: newest mission nearest the hub, on reload only ---
+
+function distanceFromHub(layout: InstanceType<typeof BuildingLayout>, roomId: string): number {
+  const hub = layout.roomView('hub')!.bounds.getCenter(new THREE.Vector3());
+  const room = layout.roomView(roomId)!.bounds.getCenter(new THREE.Vector3());
+  return hub.distanceTo(room);
+}
+
+// A hex ring's own cells are not all equidistant from the hub (a ring's corner cell sits
+// farther out than one of its edge cells, `sortByAngularCloseness`'s own angle-first order,
+// `HexPlanner.ts`) — raw Euclidean distance is not strictly monotonic claim-by-claim within one
+// ring, only ring-by-ring is. `ringProxyOf` recovers the ring a distance belongs to (safe for
+// the small ring counts a test ever reaches: `HexRoomPlanner.LATTICE_SPACING * sqrt(3)` is one
+// ring's own full step, and a ring's within-ring distance never drifts far enough to round to
+// a neighboring ring at these radii).
+function ringProxyOf(distance: number): number {
+  return Math.round(distance / (17.588457268119896 /* LATTICE_SPACING * sqrt(3) */));
+}
+
+test('issue #225: on the very first sync (a reload), the newest mission in a wing lands in a ring no farther than the oldest, and strictly nearer across a big enough age gap', () => {
+  const { layout } = setup();
+  // Three missions, same wing (forced via `component`), oldest first in arrival order — the
+  // order a server's own full room list would arrive in on a cold load, not already sorted.
+  layout.syncWorldRooms([
+    { id: 'old', kind: 'mission', title: 'Old', state: 'open', component: 'tooling', createdAt: '2026-01-01T00:00:00Z', walls: {} },
+    { id: 'mid', kind: 'mission', title: 'Mid', state: 'open', component: 'tooling', createdAt: '2026-06-01T00:00:00Z', walls: {} },
+    { id: 'new', kind: 'mission', title: 'New', state: 'open', component: 'tooling', createdAt: '2026-11-20T00:00:00Z', walls: {} },
+  ]);
+  const ringOld = ringProxyOf(distanceFromHub(layout, 'old'));
+  const ringMid = ringProxyOf(distanceFromHub(layout, 'mid'));
+  const ringNew = ringProxyOf(distanceFromHub(layout, 'new'));
+  assert.ok(ringNew <= ringMid, `newest (ring ${ringNew}) must be no farther than mid (ring ${ringMid})`);
+  assert.ok(ringMid <= ringOld, `mid (ring ${ringMid}) must be no farther than the oldest (ring ${ringOld})`);
+  assert.ok(ringNew < ringOld, `the newest (ring ${ringNew}) must land strictly nearer than the oldest (ring ${ringOld})`);
+});
+
+test('issue #225 AC3: a mission opening while the office already runs just appends outward — no live reflow of an already-placed room', () => {
+  const { layout } = setup();
+  layout.syncWorldRooms([
+    { id: 'first', kind: 'mission', title: 'First', state: 'open', component: 'tooling', createdAt: '2026-01-01T00:00:00Z', walls: {} },
+  ]);
+  const before = distanceFromHub(layout, 'first');
+  // A brand-new mission, newer than 'first', opens mid-session (a second, later sync call).
+  layout.syncWorldRooms([
+    { id: 'first', kind: 'mission', title: 'First', state: 'open', component: 'tooling', createdAt: '2026-01-01T00:00:00Z', walls: {} },
+    { id: 'second', kind: 'mission', title: 'Second', state: 'open', component: 'tooling', createdAt: '2026-11-20T00:00:00Z', walls: {} },
+  ]);
+  const after = distanceFromHub(layout, 'first');
+  assert.equal(after, before, '"first" must not move just because a newer mission opened live');
+  assert.ok(distanceFromHub(layout, 'second') > after, 'the live-opened mission appends outward, behind the one already placed, not in front of it');
+});
+
+test('issue #225 AC4: the same missions and activity reload to the same layout twice', () => {
+  const rooms = [
+    { id: 'a', kind: 'mission' as const, title: 'A', state: 'open' as const, component: 'tooling' as const, createdAt: '2026-01-01T00:00:00Z', walls: {} },
+    { id: 'b', kind: 'mission' as const, title: 'B', state: 'open' as const, component: 'tooling' as const, createdAt: '2026-11-01T00:00:00Z', walls: {} },
+  ];
+  const first = setup();
+  first.layout.syncWorldRooms(rooms);
+  const second = setup();
+  second.layout.syncWorldRooms(rooms);
+  assert.equal(distanceFromHub(first.layout, 'a'), distanceFromHub(second.layout, 'a'));
+  assert.equal(distanceFromHub(first.layout, 'b'), distanceFromHub(second.layout, 'b'));
+});
