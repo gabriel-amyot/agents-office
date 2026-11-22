@@ -864,25 +864,29 @@ export class BuildingLayout implements LayoutStrategy {
     return this.claim([this.allocateOverflowIdleStation()], 'idle');
   }
 
-  /** Issue #261 review (finding 1): the `index`-th overflow idle spot, past the Hub's own fixed
-   * desks and idle corner — a fresh station every call, never an existing one. */
+  /** Issue #261 review (finding 1): the next overflow idle spot, past the Hub's own fixed desks
+   * and idle corner — a fresh station every call, never an existing one. Review round 2:
+   * `overflowIdleCount` is now the shared spiral cursor `hubOverflowIdleSpot` hands back, not a
+   * plain call count — it can jump by more than 1 when a candidate too close to a fixed Hub
+   * spot gets skipped, so the next call never re-reads an index a previous call already tried. */
   private allocateOverflowIdleStation(): string {
-    const index = this.overflowIdleCount++;
-    const key = `hex-hub-idle-overflow-${index}`;
+    const key = `hex-hub-idle-overflow-${this.overflowIdleCount}`;
     const hub = this.hexOffice.layout.hub;
-    const spot = hubOverflowIdleSpot(hub, index);
+    const { point: spot, nextIndex } = hubOverflowIdleSpot(hub, this.overflowIdleCount);
+    this.overflowIdleCount = nextIndex;
     this.stations.set(key, station('idle', new THREE.Vector3(spot.x, 0, spot.z), new THREE.Vector3(hub.center.x, 1.0, hub.center.z)));
     return key;
   }
 
-  /** Issue #261 review (finding 2): the `index`-th overflow research spot, inside the hex
-   * Library itself — never the old rect library room `addRoom('library')` used to rent. */
+  /** Issue #261 review (finding 2): the next overflow research spot, inside the hex Library
+   * itself — never the old rect library room `addRoom('library')` used to rent. Review round 2:
+   * same shared-cursor contract as `allocateOverflowIdleStation`. */
   private allocateOverflowResearchingStation(): string {
-    const index = this.overflowResearchingCount++;
-    const key = `hex-library-overflow-${index}`;
+    const key = `hex-library-overflow-${this.overflowResearchingCount}`;
     const library = this.hexOffice.layout.library;
     const office = this.hexOffice.layout.office;
-    const spot = libraryOverflowResearchingSpot(library, index);
+    const { point: spot, nextIndex } = libraryOverflowResearchingSpot(library, this.overflowResearchingCount);
+    this.overflowResearchingCount = nextIndex;
     this.stations.set(key, station('researching', new THREE.Vector3(spot.x, 0, spot.z), new THREE.Vector3(office.center.x, 0, office.center.z)));
     return key;
   }

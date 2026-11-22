@@ -4,6 +4,9 @@ import {
   buildHexOfficeLayout,
   hexSurfaceHeightAt,
   hexWallColliders,
+  hubFurnitureSpots,
+  hubOverflowIdleSpot,
+  libraryOverflowResearchingSpot,
   pointInPolygon,
   WALKWAY_HEIGHT,
 } from '../src/addons/building/HexRoomPlanner.js';
@@ -118,5 +121,51 @@ test('the hall connector\'s walkway never crosses the rect hall\'s own footprint
       const sample = { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t };
       assert.ok(!insideHall(sample), `leg ${i} of the hall connector passes through the hall's own footprint at ${JSON.stringify(sample)}`);
     }
+  }
+});
+
+// --- Review-261 round 2: the overflow spiral must also steer clear of fixed furniture ---
+
+test('a Hub overflow idle spot never lands close enough to double up on a fixed desk or idle spot, and the cursor never repeats an index (review-261 round 2)', () => {
+  const layout = buildHexOfficeLayout();
+  const fixed = hubFurnitureSpots(layout.hub);
+  const fixedPoints = [...fixed.desks, ...fixed.idle].map((spot) => spot.position);
+  const MIN_CLEARANCE = 1.2;
+  let cursor = 0;
+  const seen = new Set<string>();
+  for (let call = 0; call < 60; call++) {
+    const { point: spot, nextIndex } = hubOverflowIdleSpot(layout.hub, cursor);
+    assert.ok(nextIndex > cursor, `call ${call}: the cursor must always advance, got ${cursor} -> ${nextIndex}`);
+    for (const fixedPoint of fixedPoints) {
+      const d = Math.hypot(spot.x - fixedPoint.x, spot.z - fixedPoint.z);
+      assert.ok(d >= MIN_CLEARANCE, `overflow idle spot (call ${call}) at ${JSON.stringify(spot)} sits only ${d.toFixed(3)} from a fixed Hub spot ${JSON.stringify(fixedPoint)}`);
+    }
+    const key = `${spot.x.toFixed(3)},${spot.z.toFixed(3)}`;
+    assert.ok(!seen.has(key), `call ${call} reused a point a previous call already got: ${key}`);
+    seen.add(key);
+    cursor = nextIndex;
+  }
+});
+
+test('a Library overflow research spot never lands close enough to double up on a fixed shelf spot, and the cursor never repeats an index (review-261 round 2)', () => {
+  const layout = buildHexOfficeLayout();
+  const fixedPoints = [
+    { x: layout.library.center.x - 2, z: layout.library.center.z - 2 },
+    { x: layout.library.center.x + 2, z: layout.library.center.z + 2 },
+  ];
+  const MIN_CLEARANCE = 1.2;
+  let cursor = 0;
+  const seen = new Set<string>();
+  for (let call = 0; call < 60; call++) {
+    const { point: spot, nextIndex } = libraryOverflowResearchingSpot(layout.library, cursor);
+    assert.ok(nextIndex > cursor, `call ${call}: the cursor must always advance, got ${cursor} -> ${nextIndex}`);
+    for (const fixedPoint of fixedPoints) {
+      const d = Math.hypot(spot.x - fixedPoint.x, spot.z - fixedPoint.z);
+      assert.ok(d >= MIN_CLEARANCE, `overflow research spot (call ${call}) at ${JSON.stringify(spot)} sits only ${d.toFixed(3)} from a fixed shelf spot ${JSON.stringify(fixedPoint)}`);
+    }
+    const key = `${spot.x.toFixed(3)},${spot.z.toFixed(3)}`;
+    assert.ok(!seen.has(key), `call ${call} reused a point a previous call already got: ${key}`);
+    seen.add(key);
+    cursor = nextIndex;
   }
 });

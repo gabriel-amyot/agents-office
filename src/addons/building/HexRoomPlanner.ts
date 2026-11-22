@@ -574,14 +574,40 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
  * margin past any real headcount — see call sites) the spiral wraps to a fresh lap at a shifted
  * starting angle, so even an unrealistic flood of agents never lands two of them on the exact
  * same point, just a tighter and tighter pack within the same floor.
+ *
+ * Review-261 round 2 (the review's own follow-up): the spiral alone only keeps its OWN points
+ * apart from each other — nothing stopped a spiral point from landing on top of a fixed station
+ * (a Hub desk, a Library shelf) that is not part of the spiral at all. `avoid` is the fixed
+ * spots to steer clear of; a candidate within `minClearance` of any of them is skipped and the
+ * next spiral index tried instead.
+ *
+ * Skipping an index must never let two DIFFERENT calls land on the same skipped-to point — if
+ * each call independently restarted its own skip-scan from its own `index`, two calls whose
+ * `index` both get skipped past the same obstacle could converge on the same candidate (a real
+ * regression the round-2 review caught via its own 60-agent test). The fix: every call reports
+ * `nextIndex`, the first internal candidate it did NOT consume, and the caller passes that back
+ * in as the next call's own `index` — a single shared cursor, so the set of internal candidates
+ * actually handed out is always a prefix-free, strictly increasing sequence; no two calls ever
+ * read the same one.
  */
-function overflowSpiralPoint(center: HexPoint, index: number, packing: number, maxRadius: number): HexPoint {
+function overflowSpiralPoint(center: HexPoint, index: number, packing: number, maxRadius: number, avoid: HexPoint[] = [], minClearance = 1.2): { point: HexPoint; nextIndex: number } {
   const perLap = Math.max(1, Math.floor((maxRadius / packing) ** 2));
-  const lap = Math.floor(index / perLap);
-  const i = index % perLap;
-  const radius = Math.min(maxRadius, packing * Math.sqrt(i + 1));
-  const angle = i * GOLDEN_ANGLE + lap * (GOLDEN_ANGLE / 2);
-  return { x: center.x + radius * Math.cos(angle), z: center.z + radius * Math.sin(angle) };
+  const pointAt = (candidateIndex: number): HexPoint => {
+    const lap = Math.floor(candidateIndex / perLap);
+    const i = candidateIndex % perLap;
+    const radius = Math.min(maxRadius, packing * Math.sqrt(i + 1));
+    const angle = i * GOLDEN_ANGLE + lap * (GOLDEN_ANGLE / 2);
+    return { x: center.x + radius * Math.cos(angle), z: center.z + radius * Math.sin(angle) };
+  };
+  for (let candidateIndex = index; candidateIndex < index + 500; candidateIndex++) {
+    const point = pointAt(candidateIndex);
+    if (avoid.every((spot) => Math.hypot(spot.x - point.x, spot.z - point.z) >= minClearance)) {
+      return { point, nextIndex: candidateIndex + 1 };
+    }
+  }
+  // Every one of 500 candidates landed too close to a fixed spot: hand out the last one tried
+  // anyway (a crowded floor should still seat every agent, just tighter) rather than throw.
+  return { point: pointAt(index + 500), nextIndex: index + 501 };
 }
 
 /** A clearance short of `HUB_RADIUS` so an overflow idle spot never stands inside the Hub's
@@ -591,20 +617,33 @@ const HUB_OVERFLOW_PACKING = 0.85;
 const HUB_OVERFLOW_MAX_RADIUS = HUB_RADIUS - 1.5;
 
 /** The `index`-th overflow idle spot (issue #261): past the Hub's own fixed desks and idle
- * corner, every further idle/overflow agent gets one of these instead of sharing a spot. */
-export function hubOverflowIdleSpot(hub: HexRoomGeometry, index: number): HexPoint {
-  return overflowSpiralPoint(hub.center, index, HUB_OVERFLOW_PACKING, HUB_OVERFLOW_MAX_RADIUS);
+ * corner, every further idle/overflow agent gets one of these instead of sharing a spot.
+ * Review-261 round 2: also steers clear of the Hub's own fixed desk and idle positions
+ * (`hubFurnitureSpots`), so an overflow spot never lands close enough to double up on an
+ * already-furnished, already-occupied seat. The caller passes the cursor it got back from its
+ * own previous call (0 for the first one) as `index`, and must store `nextIndex` for the next
+ * call — never call this twice with the same `index`. */
+export function hubOverflowIdleSpot(hub: HexRoomGeometry, index: number): { point: HexPoint; nextIndex: number } {
+  const fixed = hubFurnitureSpots(hub);
+  const avoid = [...fixed.desks, ...fixed.idle].map((spot) => spot.position);
+  return overflowSpiralPoint(hub.center, index, HUB_OVERFLOW_PACKING, HUB_OVERFLOW_MAX_RADIUS, avoid);
 }
 
 const LIBRARY_OVERFLOW_PACKING = 0.85;
 const LIBRARY_OVERFLOW_MAX_RADIUS = ROOM_RADIUS - 1.5;
+/** The hex Library's own 2 fixed shelf offsets from its center (`BuildingLayout`'s
+ * `addHexLibraryStations`, `[-2,-2]`/`[2,2]`) — kept here too so the overflow spiral can steer
+ * clear of them without `HexRoomPlanner.ts` importing `BuildingLayout.ts`. */
+const LIBRARY_SHELF_OFFSETS: Array<[number, number]> = [[-2, -2], [2, 2]];
 
 /** The `index`-th overflow research spot (issue #261 review): past the hex Library's own two
  * shelves and the hall's own two, a librarian researching still gets its own spot in the
  * Library itself — never the old rect library room (review-261 finding 2: that path must never
- * build again). */
-export function libraryOverflowResearchingSpot(library: HexRoomGeometry, index: number): HexPoint {
-  return overflowSpiralPoint(library.center, index, LIBRARY_OVERFLOW_PACKING, LIBRARY_OVERFLOW_MAX_RADIUS);
+ * build again). Review-261 round 2: also steers clear of the Library's own 2 fixed shelf spots.
+ * Same cursor contract as `hubOverflowIdleSpot`. */
+export function libraryOverflowResearchingSpot(library: HexRoomGeometry, index: number): { point: HexPoint; nextIndex: number } {
+  const avoid = LIBRARY_SHELF_OFFSETS.map(([dx, dz]) => ({ x: library.center.x + dx, z: library.center.z + dz }));
+  return overflowSpiralPoint(library.center, index, LIBRARY_OVERFLOW_PACKING, LIBRARY_OVERFLOW_MAX_RADIUS, avoid);
 }
 
 /**
