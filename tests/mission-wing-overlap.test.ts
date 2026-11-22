@@ -28,7 +28,16 @@ after(() => {
 const { slotFor, HALL, rectsOverlap } = await import('../src/addons/building/RoomPlanner.js');
 const { buildHexWorld } = await import('../src/addons/building/HexRoomPlanner.js');
 
-const RENTED_ROOM_COUNT = 25;
+/**
+ * Issue #261 review ("the wing overlap stress test threshold updated honestly"): 25 modeled
+ * the old world, where `desks`/`lab`/the numbered `lounge` could all still rent a room past
+ * their own fixed capacity — issue #260 retired every one of those; `office` (its own overflow
+ * waiting room, past ~20 or so queued agents) is the only kind left that can ever rent at all.
+ * `buildRealSizeOffice()`'s own comment already says as much: at REAL_SIZE's own 40-agent,
+ * 9-mission worst case, the rect building never grows past its one starting office room. 5 is
+ * still generous past that (several waves of a very deep queue), not the old free-for-all.
+ */
+const RENTED_ROOM_COUNT = 5;
 
 test('issue #259: the hex mission wing never overlaps the rect building, at a realistic room count on both sides', () => {
   const rented = Array.from({ length: RENTED_ROOM_COUNT }, (_, i) => ({ label: `rented-${i}`, rect: slotFor(i).rect }));

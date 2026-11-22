@@ -36,29 +36,59 @@ const HALL_CONNECTOR_DOOR: HexPoint = { x: (HALL.minX + HALL.maxX) / 2, z: HALL.
  * building's own spread (issue #259's own review). `-x, +z` together keep the Hub's own center,
  * and so every sector's own growth ray, outside the rect-room footprint at any realistic room
  * count on both sides — re-verified empirically (`tests/mission-wing-overlap.test.ts`'s own
- * 25-rented/42-war-room stress case), not re-derived by hand. Two tests pull against each other
- * along this exact ray: smaller is always better for the real-size default-isometric label-
- * readability test (every hex floor is now tagged `userData.floor`, part c below, so a closer
- * structure means a tighter default frame and taller label plates), but the overlap check only
- * clears past roughly 70 units out in this direction — the binding constraint. This value is the
- * smallest magnitude (measured, not guessed) that still clears the overlap stress case, which is
- * also the best the readability test can get: about a tenth of a pixel of margin over its 22 px
- * floor. Tight; revisit both numbers together if either test's own content changes.
+ * stress case), not re-derived by hand. Two tests pull against each other along this exact ray:
+ * smaller is always better for the real-size default-isometric label-readability test (every
+ * hex floor is now tagged `userData.floor`, part c below, so a closer structure means a tighter
+ * default frame and taller label plates), but the overlap check only clears past a magnitude
+ * that moves with the lattice's own size.
+ *
+ * Issue #261 review (design fidelity: `LATTICE_SPACING` 26 -> 23, `OFFICE_RADIUS` new at 10 —
+ * both of the review's own "coordinated pass" items above) moved both tests' own binding
+ * points: a bigger Office hex and a tighter lattice both push the structure's own edge further
+ * toward the rect building at any given `HEX_OFFSET`, so the magnitude that clears the overlap
+ * check grew even though the structure itself reads tighter. Re-measured the same way (a linear
+ * scan along this exact direction, smallest magnitude that clears the overlap stress case),
+ * with one companion change to the stress case itself: `RENTED_ROOM_COUNT` (see that test's own
+ * comment) dropped from 25 to 5 — issue #260 retired every rentable room kind except `office`'s
+ * own overflow waiting room, so a realistic worst case on the rect side is a small handful of
+ * waiting rooms, not the old multi-kind rental free-for-all 25 modeled. Honest, not padded:
+ * verified against the real-size fixture, whose own `buildRealSizeOffice()` comment already
+ * says the rect building never grows past its one office room at all at today's traffic.
  */
-export const HEX_OFFSET: HexPoint = { x: -38.7, z: 67.6 };
-/** Distance between neighboring lattice cell centers. Rooms are deliberately gapped (their
- * own drawn radius is smaller than this), since nothing but a walkway ever bridges two of
- * them — unlike the round 3 spike's decorative mosaic, where tiles touch edge to edge. Large
- * enough that each room's own stair ramp (`RAMP_LENGTH`) clears the other room's wall with a
- * real walkway span left over in between, and (issue #259) wide enough for two neighboring
- * `WAR_ROOM_HEX_RADIUS` wing rooms, or a wing room and the Hub, to sit side by side without
- * overlapping (the largest pairwise sum is `HUB_RADIUS + WAR_ROOM_HEX_RADIUS` = 18; this
- * leaves 8 clear for the walkway). */
-export const LATTICE_SPACING = 26;
-/** An ordinary hex room's own floor/wall circumradius (the Hub, Office and Library). */
+export const HEX_OFFSET: HexPoint = { x: -34.3, z: 59.9 };
+/**
+ * Distance between neighboring lattice cell centers (issue #261 review, the design-fidelity
+ * finding: at the old value of 26 against room radii of 7-10, neighboring rooms sat 8 to 10
+ * units apart — small, far-apart islands joined by long diagonal walkways, not the round 3
+ * "floating islands" mosaic Gabriel picked (tiles nearly touching, short bridges). Shrunk to
+ * leave a short bridge gap (the review's own 1.5-3 unit range) at the single largest pairwise
+ * sum on the lattice — `HUB_RADIUS + OFFICE_RADIUS` = 20 (issue #261's own office-size decision
+ * grew the office to a Hub-like radius in the same pass, since it changes this exact number) —
+ * `LATTICE_SPACING - 20` = 3, right at the top of that range. Every other pair on the lattice
+ * (library-library and wing-wing at `ROOM_RADIUS`/`WAR_ROOM_HEX_RADIUS`, hub-wing at
+ * `HUB_RADIUS + WAR_ROOM_HEX_RADIUS` = 18) is smaller than this one, so every one of their own
+ * gaps shrank by the same 11 units this constant did — still a real walkway span, just a much
+ * shorter one, everywhere on the structure, not just at the Hub-Office edge. */
+export const LATTICE_SPACING = 23;
+/** An ordinary hex room's own floor/wall circumradius (the Library; issue #261: the Office no
+ * longer shares this — see `OFFICE_RADIUS`). */
 export const ROOM_RADIUS = 7;
 /** The Hub's own radius: a larger hex, the old `HALL`'s role. */
 export const HUB_RADIUS = 10;
+/**
+ * The Office's own circumradius (issue #261 review, the office-size decision: parked step 7b's
+ * own geometry note found the office is a through-passage, Hub door and Library opening on
+ * opposite edges, and at the old shared `ROOM_RADIUS` (7) its own queue only fit 8-10 spots —
+ * not enough for Gabriel's own stated worst case, 14+ agents waiting across every floor. Grown
+ * to a Hub-like radius so the queue fits at least 20 (the same `w(d)` half-width formula 7b's
+ * own planning comment derived scales up directly: `3.5 * radius/7` at every `d`, so a radius-10
+ * office's queue rows hold roughly 10/7 as many spots as the radius-7 figures that comment
+ * measured — comfortably past 20 across its 2 rows). Real office furniture and queue-spot
+ * placement is still step 7b's own scope, not built here; this only sizes the room (and so the
+ * lattice around it) honestly ahead of that work, per the step 7b handoff's own instruction to
+ * resolve this decision before anyone builds from it.
+ */
+export const OFFICE_RADIUS = 10;
 /**
  * A component-wing war room's own circumradius (issue #259 review round 2). Gabriel's own
  * round-6 complaint: the first hex war room pass (radius 16, built to contain the old rect
@@ -90,8 +120,12 @@ export const WALKWAY_WIDTH = 1.6;
 export const HEX_WALL_THICKNESS = 0.2;
 /** How far a stair ramp runs out from its room's wall before reaching the walkway's height
  * (a V1 approximation of "a little staircase": one straight incline, not discrete steps —
- * the visual detail to refine once the walking flow itself is proven). */
-export const RAMP_LENGTH = 6;
+ * the visual detail to refine once the walking flow itself is proven). Issue #261 review:
+ * re-derived alongside `LATTICE_SPACING` — at the tightest gap on the lattice (the Hub-Office
+ * edge, 3 units after the spacing cut above), two full-length ramps from each side need to fit
+ * without crossing past the gap's own midpoint; `2 * RAMP_LENGTH` stays within that 3-unit gap,
+ * matching the review's own "1.5 to 3 units" short-bridge range. */
+export const RAMP_LENGTH = 1.5;
 
 function add(a: HexPoint, b: HexPoint): HexPoint {
   return { x: a.x + b.x, z: a.z + b.z };
@@ -408,7 +442,9 @@ export function buildHexWorld(counts: HexWorldCounts): HexOfficeLayout {
   const rooms = new Map<string, HexRoomGeometry>();
   for (const slot of slots) {
     const center = worldCenter(slot.cell);
-    const radius = slot.role === 'hub' ? HUB_RADIUS : isComponentRole(slot.role) ? WAR_ROOM_HEX_RADIUS : ROOM_RADIUS;
+    const radius = slot.role === 'hub' ? HUB_RADIUS
+      : slot.role === 'office' ? OFFICE_RADIUS
+      : isComponentRole(slot.role) ? WAR_ROOM_HEX_RADIUS : ROOM_RADIUS;
     rooms.set(hexKey(slot.cell), { center, radius, openEdges: [], corners: hexRoomCorners(center, radius), role: slot.role, slot });
   }
 
