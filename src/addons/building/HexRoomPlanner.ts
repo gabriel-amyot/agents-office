@@ -19,19 +19,20 @@ import { OFFICE } from '../../utils/Constants.js';
  * grow outward from the origin in every direction) so the two coexist without touching, per
  * step 2's AC ("side by side with the old rect rooms, which keep working unconverted"). */
 /**
- * Issue #259 review: an x-only offset coexists with the rect building fine while only the Hub,
- * Office and Library exist (every sector that could actually grow pointed away from the rect
- * building's own origin-centered spread) — but the office/library sector (0, angle 0°, `+x`)
- * and the `tooling` wing's own sector (3, angle 180°, `-x`) sit on exactly opposite sides of the
- * Hub. A busy `tooling` wing grows straight back down the same x-axis this offset sits on, and
- * at a realistic room count (`tests/mission-wing-overlap.test.ts`'s own 42-room stress case,
- * matching `tests/mission-corridor-render-budget.test.ts`'s scale) it crosses back through
- * x = 0 and overlaps the rect building's own rented rooms. A `z` offset, not just `x`, moves
- * every sector's own growth ray clear of the rect building's origin-centered spread (which
- * stays within roughly z = ±100 even at dozens of rented rooms): the Hub sits off to the side
- * in both axes, so no sector's ray, however far it grows, re-enters that spread.
+ * Issue #260 (step 7a, "the building should read as one"): the hex structure sits just outside
+ * the rect building now, not 360 units away on its own continent. `-x, +z` (south-west of the
+ * rect hall) is the one direction clear of every rect-room growth ray: `RoomPlanner.ts`'s
+ * `FIRST_RING` only ever rents east (`+x`), south (`+z`, fixed `x` range) and west (`-x`, fixed
+ * `z` range) — never north — and the office/library sector (0, angle 0°, `+x`) and `tooling`
+ * (sector 3, angle 180°, `-x`) sit on opposite sides of the Hub along the x-axis, so a bare x
+ * offset alone still risks a busy `tooling` wing crossing back through x = 0 into the rect
+ * building's own spread (issue #259's own review). `-x, +z` together keep the Hub's own center,
+ * and so every sector's own growth ray, outside the rect-room footprint at any realistic room
+ * count on both sides — re-verified empirically (`tests/mission-wing-overlap.test.ts`'s own
+ * 25-rented/42-war-room stress case), not re-derived by hand: this is close to the smallest
+ * magnitude in that direction with zero overlaps, leaving only a small margin.
  */
-export const HEX_OFFSET: HexPoint = { x: 300, z: 200 };
+export const HEX_OFFSET: HexPoint = { x: -60, z: 110 };
 /** Distance between neighboring lattice cell centers. Rooms are deliberately gapped (their
  * own drawn radius is smaller than this), since nothing but a walkway ever bridges two of
  * them — unlike the round 3 spike's decorative mosaic, where tiles touch edge to edge. Large
