@@ -24,6 +24,7 @@
  * furnishing pass.
  */
 import * as THREE from 'three';
+import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { getToonMaterial } from '../../utils/Materials.js';
 import { markStatic } from '../../scene/StaticMerge.js';
 import type { WallRect } from '../../layout/LayoutStrategy.js';
@@ -35,6 +36,7 @@ import {
   hexSurfaceHeightAt,
   hexRoomFrame,
   hubFurnitureSpots,
+  hubToolCribSpot,
   pointInPolygon,
   type HexOfficeLayout,
   type HexRoomGeometry,
@@ -47,6 +49,10 @@ import {
 import type { HexPoint } from './HexPlanner.js';
 import { FIGURE_EYE_HEIGHT } from '../../characters/StickFigureParts.js';
 import { createDesk } from '../../furniture/Desk.js';
+import { createTestStation } from '../../furniture/TestStation.js';
+import { createToolCrib } from '../../furniture/ToolCrib.js';
+import { hexOfficeFrame, HEX_OFFICE_DESK } from './hexDeskGeometry.js';
+import { QUEUE_COUNT_SIGN } from './rooms.js';
 
 /** A stone tone distinct from the rect building's own `Colors.wall`, so the two structures
  * read as separate at a glance in the isometric view. */
@@ -89,10 +95,11 @@ function orientedBox(from: THREE.Vector3, to: THREE.Vector3, crossA: number, cro
  * floor's world bounds into the isometric camera's default pan/zoom limits. Step 2 deliberately
  * left this untagged while `HEX_OFFSET` sat 360 units from the rect building — it zoomed the
  * default view out far enough to drop "Your office"'s label under the 22 px readability floor
- * (`tests/wayfinding.test.ts`). Now that the hex structure sits just outside the rect hall
- * (`HEX_OFFSET`, step 7a part b), the default isometric overview should show the whole
- * building, rect lobby and hex wings together, not just one or the other; the real-size
- * label-readability test is what actually proves the margin still holds. */
+ * (`tests/wayfinding.test.ts`). Issue #260 step 7b item 5: the rect hall is gone from the
+ * 'building' layout entirely now, and `HEX_OFFSET` centers the hex building at the origin — the
+ * default isometric overview frames the whole hex building alone (Hub, Office, Library, every
+ * wing), nothing else left to show; the real-size label-readability test is what actually
+ * proves the margin still holds. */
 function buildHexFloor(room: HexRoomGeometry, color: number): THREE.Mesh {
   const positions: number[] = [];
   for (let i = 0; i < 6; i++) {
@@ -200,6 +207,81 @@ export function hexRoomView(room: HexRoomGeometry, kind?: string): { bounds: THR
   return { bounds, standing: { position, lookAt }, ...(kind ? { kind } : {}) };
 }
 
+function signElement(text: string): CSS2DObject {
+  const element = document.createElement('div');
+  element.className = 'desk-sign';
+  element.textContent = text;
+  Object.assign(element.style, {
+    background: 'rgba(30, 32, 48, 0.85)', color: '#f5f0e8', padding: '2px 8px', borderRadius: '4px',
+    font: '600 12px system-ui, sans-serif', whiteSpace: 'nowrap', pointerEvents: 'none',
+  });
+  return new CSS2DObject(element);
+}
+
+/**
+ * Issue #260 step 7b, step 2: the hex Office's own desk and chair, built side by side with the
+ * rect office's furniture (which keeps working, unconverted, until step 3 switches
+ * `BuildingLayout`'s queue/desk-view/desk-talk-spot over and deletes the rect system outright).
+ * `createDesk(false)`: no stock monitor (same reason the rect office's own desk drops it,
+ * `furnishing.ts`'s `usersOffice` branch) — the hex office's own 2 small monitors are
+ * `deskMonitors.ts`'s job once step 3 repoints that extension at this desk instead of building
+ * a second, disconnected pair here. The chair is named `'desk-chair'` (`Desk.ts`'s own
+ * convention) so `BuildingLayout`'s existing visibility toggle (issue #243, "hide the chair
+ * while in desk mode") finds this one too, once step 3 wires it up.
+ *
+ * The "You" sign and the (initially hidden) queue-count sign reuse `rooms.ts`'s own CSS2D
+ * styling and `QUEUE_COUNT_SIGN` name, so `BuildingLayout`'s existing sign-update code (which
+ * already looks up `QUEUE_COUNT_SIGN` by name) finds this one too without a hex-specific branch.
+ */
+export function buildHexOfficeDesk(layout: HexOfficeLayout): THREE.Group {
+  const frame = hexOfficeFrame(layout);
+  const group = new THREE.Group();
+  group.name = 'hex-office-desk';
+  // One desk's own few materials (top, legs, chair seat/back, chair pole/base) would each cost
+  // their own draw call as separate `Mesh`es (three.js never auto-batches by shared material);
+  // the same `markStatic` merge every other hex zone already uses collapses them to one draw
+  // call per material regardless of how many pieces share it — here, as everywhere else in
+  // this file, that is a handful of calls total, not "zero", but still bounded and small.
+  // `castShadow: false`, matching every other hex zone (this file's own top-of-file note: the
+  // structure sits far from the rect hall's 3 shadow-casting ceiling lights, so a cast shadow
+  // here buys nothing for 3x the draw-call cost — confirmed by measurement: `castShadow: true`
+  // alone added 13 calls to the render-budget fixture, `false` added only the material count).
+  markStatic(group, { zone: 'hex-office-desk', castShadow: false });
+
+  const desk = createDesk(false);
+  desk.position.copy(frame.point(HEX_OFFICE_DESK.a, HEX_OFFICE_DESK.d));
+  // `frame.faceDoor` already points a piece toward the door (the Hub); the desk's own front
+  // (where the chair sits, `Desk.ts`'s `+z`) should instead face away from the door, toward the
+  // queue approaching from it — the same `FACE_AWAY` convention `furnishing.ts`'s rect office
+  // plan uses for its own desk.
+  desk.rotation.y = frame.faceAway;
+  desk.castShadow = true;
+  group.add(desk);
+
+  const you = signElement('You');
+  you.position.copy(frame.point(HEX_OFFICE_DESK.a, HEX_OFFICE_DESK.d + 0.7, 2.2));
+  // A detail sign (`LabelDetail.ts`): shows when zoomed in or hovered, so it does not cover the
+  // queue in the overview — the same treatment the rect office's own "You" sign got
+  // (`furnishing.ts`'s `furnishOffice`, now gone). `rect` is the office's own AABB, the same
+  // shape `hexRoomView`'s bounds already use.
+  const officeXs = layout.office.corners.map((corner) => corner.x);
+  const officeZs = layout.office.corners.map((corner) => corner.z);
+  you.userData.detailSign = {
+    rect: { minX: Math.min(...officeXs), maxX: Math.max(...officeXs), minZ: Math.min(...officeZs), maxZ: Math.max(...officeZs) },
+    hoverOnly: false,
+  };
+  group.add(you);
+
+  const queueCount = signElement('');
+  queueCount.name = QUEUE_COUNT_SIGN;
+  queueCount.userData.queueCount = 0;
+  queueCount.visible = false;
+  queueCount.position.copy(frame.point(HEX_OFFICE_DESK.a, HEX_OFFICE_DESK.d + 0.7, 2.5));
+  group.add(queueCount);
+
+  return group;
+}
+
 export interface BuiltHexOffice {
   group: THREE.Group;
   layout: HexOfficeLayout;
@@ -210,6 +292,9 @@ export interface BuiltHexOffice {
    * `BuildingLayout.ts` to register once, same as the hex Library's own stations. */
   hubDeskSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
   hubIdleSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
+  /** Issue #260 step 7b item 4: the Hub's own fixed test stations — the rect hall's two test
+   * stations (`Office.ts`'s `test_0`/`test_1`) had no hex home at all until now. */
+  hubTestSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
   /** `#room=hub` / `#room=hex-office` (issue #242 review). Unknown names return null, the
    * same contract `BuildingLayout.roomView` already keeps for a rect room. */
   roomView(name: string): { bounds: THREE.Box3; standing: { position: THREE.Vector3; lookAt: THREE.Vector3 }; kind?: string } | null;
@@ -257,17 +342,6 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     walkway.add(orientedBox(v3(connection.childRamp.from, 0), v3(connection.childRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
     walkway.add(orientedBox(v3(connection.parentRamp.to, WALKWAY_HEIGHT), v3(connection.childRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
   }
-  // Issue #260 (step 7a part b): the Hub's own short walkway out to the rect hall — up at the
-  // Hub's own open edge, flat across, down at the hall's own door. Shares this zone, so it costs
-  // nothing extra (the budget rule in issue #217: new hex geometry pays for itself).
-  const { hubRamp, deck: hallDeck, hallRamp } = layout.hallConnector;
-  walkway.add(orientedBox(v3(hubRamp.from, 0), v3(hubRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
-  // Issue #261 review: `deck` bends around the hall's own footprint (it is a polyline, not one
-  // straight segment) — one box per leg, still the same shared zone (no added draw call).
-  for (let i = 0; i < hallDeck.length - 1; i++) {
-    walkway.add(orientedBox(v3(hallDeck[i], WALKWAY_HEIGHT), v3(hallDeck[i + 1], WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
-  }
-  walkway.add(orientedBox(v3(hallRamp.from, WALKWAY_HEIGHT), v3(hallRamp.to, 0), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
   group.add(walkway);
 
   const accents = new THREE.Group();
@@ -284,6 +358,14 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
   kitchen.position.set((layout.hub.center.x + hubSide.x) / 2, 0, (layout.hub.center.z + hubSide.z) / 2);
   kitchen.lookAt(layout.hub.center.x, 0, layout.hub.center.z);
   accents.add(kitchen);
+  // Issue #260 step 7b item 4: the tool crib moves out of the rect hall (`Office.ts`, its only
+  // home until now) into real hub furniture — same zone as the elevator/kitchen, so it still
+  // costs only its own material count, not a whole new draw-call bucket of its own.
+  const toolCrib = createToolCrib();
+  const cribSpot = hubToolCribSpot(layout.hub);
+  toolCrib.position.set(cribSpot.x, 0, cribSpot.z);
+  toolCrib.lookAt(layout.hub.center.x, 0, layout.hub.center.z);
+  accents.add(toolCrib);
   group.add(accents);
 
   // Issue #260 (step 7a part a): the Hub's own fixed open-office capacity — spare desks for a
@@ -318,6 +400,27 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     lookAt: new THREE.Vector3(spot.lookAt.x, 1.0, spot.lookAt.z),
   }));
 
+  // Issue #260 step 7b item 4: the Hub's own fixed test stations, the same "one real piece of
+  // furniture per spot" treatment the spare desks above get, own zone so it costs its own
+  // material count regardless of how many stations exist (2 today, fixed, same as the Hub
+  // never growing past its own spare-desk count).
+  const hubTests = new THREE.Group();
+  hubTests.name = 'hex-hub-test';
+  markStatic(hubTests, { zone: 'hex-hub-test', castShadow: false });
+  const hubTestSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }> = [];
+  for (const spot of hubFurniture.testing) {
+    const testStation = createTestStation();
+    testStation.position.set(spot.position.x, 0, spot.position.z);
+    testStation.lookAt(spot.lookAt.x, 0, spot.lookAt.z);
+    hubTests.add(testStation);
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(testStation.quaternion);
+    hubTestSpots.push({
+      position: testStation.position.clone().addScaledVector(forward, 0.9),
+      lookAt: testStation.position.clone().addScaledVector(forward, -0.15).setY(1.4),
+    });
+  }
+  group.add(hubTests);
+
   // Issue #258 review (the floor-library plugin's NPC/shelves went dark the moment the rect
   // library room they keyed off, `room-N-library`, was deleted): an invisible, zero-geometry
   // marker, found by name the same way that plugin already finds a rect room, carrying the
@@ -337,6 +440,11 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     minZ: Math.min(...libraryZs), maxZ: Math.max(...libraryZs),
   };
   group.add(libraryMarker);
+
+  // Issue #260 step 7b, step 2: the hex Office's own desk, chair and signs — side by side with
+  // the rect office's, not wired to the real queue/desk-view/desk-talk-spot yet (step 3's job).
+  const officeDesk = buildHexOfficeDesk(layout);
+  group.add(officeDesk);
 
   // Issue #242 review (root cause of the "very dark" finding): the scene's only real light
   // sources are 3 fixed ceiling spotlights over the rect hall (`SceneSetup.ts`'s
@@ -362,10 +470,15 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     surfaceHeightAt: (x: number, z: number) => hexSurfaceHeightAt(layout, x, z),
     hubDeskSpots,
     hubIdleSpots,
+    hubTestSpots,
     roomView: (name: string) => {
       const query = name.trim().toLowerCase();
       if (query === 'hub') return hexRoomView(layout.hub);
-      if (query === 'hex-office') return hexRoomView(layout.office);
+      // Issue #260 steps 2+3: the rect office is gone, along with the `#room=office` path that
+      // used to frame it (`BuildingLayout.ts`'s own deleted rect lookup) — `office` keeps
+      // working as a `hex-office` alias so a bookmarked or documented `#room=office` link
+      // (`Selection.ts`'s own doc comment) still resolves, to the one office that is left.
+      if (query === 'hex-office' || query === 'office') return hexRoomView(layout.office);
       // Issue #258: `kind: 'library'` is load-bearing — `ViewController` already special-cases
       // it (walking in or double-clicking it swaps to the library's own scene, issue #239)
       // for whichever room carries it, rect or hex.

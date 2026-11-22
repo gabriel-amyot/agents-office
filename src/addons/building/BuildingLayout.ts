@@ -1,13 +1,11 @@
 import * as THREE from 'three';
 import type { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { Activity } from '../../agents/ActivityAnimations.js';
-import { OFFICE_WALLS, type Station } from '../../scene/Office.js';
-import { OFFICE } from '../../utils/Constants.js';
+import type { Station } from '../../scene/Office.js';
 import type { LayoutAgent, LayoutMove, LayoutStrategy, RoomView, Seat } from '../../layout/LayoutStrategy.js';
-import { HALL, ROOM_SIZE, matchingDoor, slotFor, type Door, type Rect, type RoomSlot } from './RoomPlanner.js';
-import { buildCeiling, buildRoom, buildWalls, markCutaway, QUEUE_COUNT_SIGN, ROOM_STATION_TYPE, RoomFrame, WALL_HEIGHT, roomTitle, station, wallRects, type RoomKind, type WallRect } from './rooms.js';
-import { deskCameraPose, deskTalkSpotPose, monitorWorldCorners } from './deskGeometry.js';
-import { showLoadedPortrait } from './portrait.js';
+import type { Rect } from './RoomPlanner.js';
+import { QUEUE_COUNT_SIGN, station, type WallRect } from './rooms.js';
+import { hexDeskCameraPose, hexDeskTalkSpotPose, hexMonitorWorldCorners, hexQueueSpotWorldPositions } from './hexDeskGeometry.js';
 import { roomLabel, roomLabelBatchFor } from './roomLabels.js';
 import { buildMissionRoom, type MissionRoom } from './missionRooms.js';
 import { tombstoneNameBatchFor } from './tombstoneNames.js';
@@ -19,10 +17,9 @@ import { attentionBand, compareWaits, queuesForYou } from '../../ui/attention.js
 import { markStatic } from '../../scene/StaticMerge.js';
 import { createStool } from '../../furniture/Stool.js';
 import type { PickTarget } from '../../scene/Selection.js';
-import { FIGURE_EYE_HEIGHT } from '../../characters/StickFigureParts.js';
 import { createMissionsBoard, placeMissionsBoard, type MissionBoardEntry } from './missionsBoard.js';
 import { buildHexOffice, hexRoomView, type BuiltHexOffice } from './HexRooms.js';
-import { hubOverflowIdleSpot, libraryOverflowResearchingSpot, pointInPolygon, type ComponentRole, type HexWorldCounts } from './HexRoomPlanner.js';
+import { hubOverflowIdleSpot, libraryOverflowResearchingSpot, officeOverflowQueueSpot, pointInPolygon, type ComponentRole, type HexWorldCounts } from './HexRoomPlanner.js';
 import { componentForWing } from './componentWing.js';
 
 /**
@@ -53,17 +50,6 @@ const TRIP_STATION: Partial<Record<Activity, string>> = {
   idle: 'idle',
 };
 /**
- * Review-261 (finding 2): deriving this from every `ROOM_STATION_TYPE` entry automatically
- * included `researching -> library` — reachable from `claimOfType`, which rented the old
- * rectangular library room the moment the hex Library's own stations and the hall's own
- * shelves ran out, despite `rooms.ts`'s own comment calling that path "unreachable in
- * practice." It was not. Only `office` (the user's own room, plus an overflow waiting room past
- * ~20 queued agents) still rents; `researching` overflow now grows more hex-Library spots
- * instead (`allocateOverflowResearchingStation`) — the rect library must never build again.
- */
-const ROOM_FOR_STATION: Partial<Record<string, RoomKind>> = { [ROOM_STATION_TYPE.office]: 'office' };
-
-/**
  * The Librarian persona badge (issue #128, Prospero's own review on the issue): the real
  * signal the `bmad` plugin's hat detection reports (`bmad.py agent librarian`, a Skill
  * call, or a subagent type that resolves to it, `plugins/bmad/roster.ts`), never a name
@@ -73,23 +59,14 @@ function isLibrarian(extras: LayoutAgent['extras']): boolean {
   return Array.isArray(extras?.badges) && extras.badges.includes('librarian');
 }
 
-/** The hall's own permanent opening onto the hex Hub's walkway (issue #260, step 7a part b):
- * the hall's north wall, the one side `RoomPlanner.ts`'s `FIRST_RING` never docks a rented room
- * onto, matching `HexRoomPlanner.ts`'s own `HALL_CONNECTOR_DOOR` (the same world point, the
- * hall's own north wall midpoint) — never conditional on any room being rented, unlike every
- * other hall door. */
-const HALL_CONNECTOR_DOOR: Door = { side: 'north', at: 0 };
-
 export const BUILDING_STORAGE_KEY = 'agents-office.building.rooms';
-/** Marks the one-time legacy-rooms migration as done (issue #191, `migrateLegacyRooms`), so it
- * never runs a second time no matter which floor is focused afterward. */
-const ROOMS_MIGRATED_KEY = 'agents-office.building.rooms.migrated';
 /**
- * Each floor keeps its own room-kind list under its own storage key (issue #118 floors
- * design: `BUILDING_STORAGE_KEY` becomes `BUILDING_STORAGE_KEY:<floor>`). Without a floor
- * name (`BuildingOptions.floor` unset, the shape every building-layout test used before
- * floors shipped), the legacy bare key stays untouched: a feature appears only when its
- * data exists (rule 3).
+ * Each floor used to keep its own rented room-kind list under its own storage key (issue #118
+ * floors design: `BUILDING_STORAGE_KEY` becomes `BUILDING_STORAGE_KEY:<floor>`). Rect rooms
+ * are gone (issue #260 steps 2+3: `addRoom`/`saveRooms` deleted), but the key shape is still
+ * what `dropLegacyRoomStorage` below sweeps, and what `FloorRegistry.ts`'s
+ * `floorRoomsStorageKey` still has to match byte for byte (its own doc comment, and
+ * `tests/floor-registry.test.ts`'s cross-check).
  */
 export function floorStorageKey(floor?: string): string {
   return floor ? `${BUILDING_STORAGE_KEY}:${floor}` : BUILDING_STORAGE_KEY;
@@ -101,9 +78,6 @@ export const MISSION_COUNTS_STORAGE_KEY = 'agents-office.building.missionCounts'
 const DEFAULT_DWELL_MS = 4000;
 const QUEUE_REFRESH_MS = 500;
 const MISSIONS_BOARD_REFRESH_MS = 1000;
-const ROOM_KINDS: readonly string[] = ['office', 'library'];
-/** A standing agent's own eye height (issue #89, `#room=` first person; issue #174 aligned this with `FreeCamera`'s own ground-walk eye height). */
-const ROOM_VIEW_EYE_HEIGHT = FIGURE_EYE_HEIGHT;
 
 /**
  * Lowercased, non-alphanumeric runs collapsed to one `-`, leading/trailing `-` trimmed
@@ -116,19 +90,34 @@ function slugify(text: string): string {
 }
 
 /**
- * The camera framing for a room's slot (issue #89, `#room=`): its world bounds, floor to
- * wall height, and a first-person standing pose a third of the way in from the door,
- * looking further inward toward the room's main (far) wall. Pure: no scene, no layout state.
+ * Issue #260 steps 2+3: BuildingLayout no longer rents rect rooms off the hall — `addRoom`,
+ * `saveRooms` and the old `migrateLegacyRooms` (which only ever copied this same data forward
+ * a floor at a time) are gone, replaced by the hex Hub/Office/Library, which never grow a new
+ * rented room. A returning browser may still hold the room-kind lists those deleted functions
+ * once saved: the single legacy bare key, plus one `floorStorageKey(floor)` key per floor ever
+ * grown. Left behind, they are not just inert — `floorsWithStoredRooms` (`FloorRegistry.ts`)
+ * reads that exact key shape to decide whether a floor with no live agent still belongs in the
+ * floor-switch menu, so a stale key would list a floor forever on data that no longer means
+ * anything. Runs once per browser (its own marker key below), sweeps every key sharing the
+ * legacy prefix, and never writes a replacement.
  */
-export function roomViewFromSlot(slot: RoomSlot): RoomView {
-  const bounds = new THREE.Box3(
-    new THREE.Vector3(slot.rect.minX, 0, slot.rect.minZ),
-    new THREE.Vector3(slot.rect.maxX, WALL_HEIGHT, slot.rect.maxZ),
-  );
-  const frame = new RoomFrame(slot.rect, slot.door);
-  const position = frame.point(0, ROOM_SIZE * 0.35, ROOM_VIEW_EYE_HEIGHT);
-  const lookAt = position.clone().addScaledVector(frame.inward, 4);
-  return { bounds, standing: { position, lookAt } };
+export const ROOMS_DROPPED_KEY = 'agents-office.building.rooms.dropped';
+
+export function dropLegacyRoomStorage(storage: BuildingOptions['storage']): void {
+  if (!storage || typeof storage.length !== 'number' || typeof storage.key !== 'function' || typeof storage.removeItem !== 'function') return;
+  try {
+    if (storage.getItem(ROOMS_DROPPED_KEY)) return;
+    const prefix = `${BUILDING_STORAGE_KEY}:`;
+    const keys: string[] = [];
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      if (key === BUILDING_STORAGE_KEY || key?.startsWith(prefix)) keys.push(key);
+    }
+    for (const key of keys) storage.removeItem(key);
+    storage.setItem(ROOMS_DROPPED_KEY, '1');
+  } catch {
+    // Storage full or blocked: the dead keys just linger, harmless either way
+  }
 }
 
 type Target = 'home' | 'pod' | 'queue' | `trip:${string}` | `room:${string}`;
@@ -148,20 +137,17 @@ interface AgentState {
   queuedAt: number | null;
 }
 
-interface RoomRecord {
-  kind: RoomKind;
-  index: number;
-  group: THREE.Group;
-  extraDoors: Door[];
-}
-
 export interface BuildingOptions {
   now?: () => number;
   dwellMs?: number;
-  storage?: Pick<Storage, 'getItem' | 'setItem'>;
+  /** `dropLegacyRoomStorage` enumerates every key sharing the legacy rect-rooms prefix, not
+   * just one it already knows the name of — `length`/`key`/`removeItem`, past plain
+   * `getItem`/`setItem`, but optional here: a test's minimal mock storage can skip them, and
+   * `dropLegacyRoomStorage` itself no-ops rather than crash without them. */
+  storage?: Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'length' | 'key' | 'removeItem'>>;
   /** A real wall clock (epoch ms), for the missions board's elapsed/duration timer. Defaults to `Date.now`. */
   wallClock?: () => number;
-  /** The focused floor's name (issue #118): its own room-kind list lives at `floorStorageKey(floor)`. Unset keeps the legacy single-building key. */
+  /** The focused floor's name (issue #118): meaningful only to `syncWorldRooms`'s own per-floor repo filter now. Unset shows every floor's war rooms (`ALL_FLOORS`). */
   floor?: string;
 }
 
@@ -175,8 +161,6 @@ export interface BuildingOptions {
 export class BuildingLayout implements LayoutStrategy {
   readonly id = 'building';
   private agents = new Map<string, AgentState>();
-  private rooms: RoomRecord[] = [];
-  private hallWalls: THREE.Group | null = null;
   private missionRooms = new Map<string, MissionRoom>();
   /** Issue #259: how many hex rooms each wing (and the Library) has actually claimed so far —
    * `rebuildHexOffice` passes this straight to `buildHexWorld`. The Library stays fixed at 1
@@ -203,12 +187,19 @@ export class BuildingLayout implements LayoutStrategy {
    * rebuild (see `addHexLibraryStations`'s own comment) rather than leaking a fresh one into
    * `RoomLabelBatch` each time. */
   private hexLibraryLabel: THREE.Object3D | undefined;
+  /** Issue #260 step 7b item 4: the hex Office's and Hub's own room labels, same reuse-and-
+   * re-parent pattern as `hexLibraryLabel` above — the rect office's own "Your office" plate
+   * (`furnishing.ts`'s `usersOffice`) went dark when the rect office was deleted in step 3,
+   * and the Hub never had one at all. */
+  private hexOfficeLabel: THREE.Object3D | undefined;
+  private hexHubLabel: THREE.Object3D | undefined;
   /** Issue #261 review (finding 1): how many overflow idle/research spots have been handed out
    * so far — `claimOfType` grows these one at a time (`hubOverflowIdleSpot`/
    * `libraryOverflowResearchingSpot`), never reusing an already-occupied fixed station. Counts
    * only ever grow, so an index (and so its spot) is never reassigned once an agent holds it. */
   private overflowIdleCount = 0;
   private overflowResearchingCount = 0;
+  private overflowQueueCount = 0;
 
   constructor(private scene: THREE.Scene, private stations: Map<string, Station>, options: BuildingOptions = {}) {
     this.now = options.now ?? (() => performance.now());
@@ -216,19 +207,10 @@ export class BuildingLayout implements LayoutStrategy {
     this.dwellMs = options.dwellMs ?? DEFAULT_DWELL_MS;
     this.storage = options.storage;
     this.floor = options.floor;
-    this.migrateLegacyRooms();
-    this.hideHallSideWalls();
+    dropLegacyRoomStorage(this.storage);
     this.rebuildHexOffice();
     placeMissionsBoard(this.missionsBoard.mesh, this.scene);
     this.missionsBoard.draw([], this.wallClock());
-    // `rememberedRooms` always returns the office first (issue #192: it is the lobby, not one
-    // floor's own room, so a floor can never come up without it), so there is no fallback
-    // list to fall through to here.
-    // Issue #258: 'library' is filtered out here — the rect library room is gone, replaced by
-    // the hex one behind the Office (`addHexLibraryStations` below). A remembered room list
-    // from before this step may still carry 'library' from local storage; harmless to drop.
-    for (const kind of this.rememberedRooms().filter((kind) => kind !== 'library')) this.addRoom(kind, false);
-    this.saveRooms();
   }
 
   /**
@@ -243,6 +225,58 @@ export class BuildingLayout implements LayoutStrategy {
     this.scene.add(this.hexOffice.group);
     this.addHexLibraryStations();
     this.addHexHubStations();
+    this.addHexOfficeQueueStations();
+    this.addHexOfficeAndHubLabels();
+  }
+
+  /**
+   * Issue #260 step 7b item 4: wayfinding plates for the hex Office ("Your office", the rect
+   * office's own old text, now the only office there is) and the hex Hub (a short "Hub" name —
+   * the hex structure's own front door, not a named destination the rect building ever had).
+   * Same reuse-and-re-parent shape `addHexLibraryStations` already uses for the Library's own
+   * plate: both rooms are fixed, single cells that never move, so one label each, built once
+   * and just re-parented onto the fresh group every `rebuildHexOffice`, is always still
+   * correctly positioned.
+   */
+  private addHexOfficeAndHubLabels(): void {
+    const officeCorners = this.hexOffice.layout.office.corners;
+    const officeRect: Rect = {
+      minX: Math.min(...officeCorners.map((c) => c.x)),
+      maxX: Math.max(...officeCorners.map((c) => c.x)),
+      minZ: Math.min(...officeCorners.map((c) => c.z)),
+      maxZ: Math.max(...officeCorners.map((c) => c.z)),
+    };
+    const officeCenter = this.hexOffice.layout.office.center;
+    if (!this.hexOfficeLabel) this.hexOfficeLabel = roomLabel('Your office', new THREE.Vector3(officeCenter.x, 0, officeCenter.z), officeRect);
+    this.hexOffice.group.add(this.hexOfficeLabel);
+    roomLabelBatchFor(this.scene).track(this.hexOfficeLabel);
+
+    const hubCorners = this.hexOffice.layout.hub.corners;
+    const hubRect: Rect = {
+      minX: Math.min(...hubCorners.map((c) => c.x)),
+      maxX: Math.max(...hubCorners.map((c) => c.x)),
+      minZ: Math.min(...hubCorners.map((c) => c.z)),
+      maxZ: Math.max(...hubCorners.map((c) => c.z)),
+    };
+    const hubCenter = this.hexOffice.layout.hub.center;
+    if (!this.hexHubLabel) this.hexHubLabel = roomLabel('Hub', new THREE.Vector3(hubCenter.x, 0, hubCenter.z), hubRect);
+    this.hexOffice.group.add(this.hexHubLabel);
+    roomLabelBatchFor(this.scene).track(this.hexHubLabel);
+  }
+
+  /**
+   * Issue #260 step 7b: the hex Office's own queue, in front of the hex desk
+   * (`hexQueueSpotWorldPositions`, 30 spots at `ROOM_RADIUS = 9`) — the replacement for the
+   * rect office's rented-room queue (`rooms.ts`'s `office` plan, `type: 'queue'`). Same station
+   * type (`'queue'`), so `orderQueue`/`claimOfType('queue')` need no change beyond where the
+   * spots come from; `setStationPreservingOccupancy` keeps an already-waiting agent's own seat
+   * occupied across a wing-growth rebuild, same as every other hex station here.
+   */
+  private addHexOfficeQueueStations(): void {
+    hexQueueSpotWorldPositions(this.hexOffice.layout).forEach((position, i) => {
+      const lookAt = hexDeskCameraPose(this.hexOffice.layout).position;
+      this.setStationPreservingOccupancy(`hex-office-queue-${i}`, station('queue', position, lookAt));
+    });
   }
 
   /**
@@ -259,6 +293,11 @@ export class BuildingLayout implements LayoutStrategy {
     });
     this.hexOffice.hubIdleSpots.forEach((spot, i) => {
       this.setStationPreservingOccupancy(`hex-hub-idle-${i}`, station('idle', spot.position, spot.lookAt));
+    });
+    // Issue #260 step 7b item 4: the Hub's own fixed test stations — the rect hall's two test
+    // stations had no hex home at all; same registration shape as the desk/idle spots above.
+    this.hexOffice.hubTestSpots.forEach((spot, i) => {
+      this.setStationPreservingOccupancy(`hex-hub-test-${i}`, station('testing', spot.position, spot.lookAt));
     });
   }
 
@@ -312,10 +351,6 @@ export class BuildingLayout implements LayoutStrategy {
     if (!this.hexLibraryLabel) this.hexLibraryLabel = roomLabel('Library', new THREE.Vector3(center.x, 0, center.z), rect);
     this.hexOffice.group.add(this.hexLibraryLabel);
     roomLabelBatchFor(this.scene).track(this.hexLibraryLabel);
-  }
-
-  get roomKinds(): RoomKind[] {
-    return this.rooms.map((room) => room.kind);
   }
 
   /**
@@ -391,9 +426,8 @@ export class BuildingLayout implements LayoutStrategy {
   }
 
   /**
-   * Where the camera should go to show a named room (issue #89, `#room=`). A room kind
-   * ("office": always the first one, "Your office", never a later overflow waiting room;
-   * "desks", "library", "lab", "lounge": the first room of that kind), or a mission room.
+   * Where the camera should go to show a named room (issue #89, `#room=`). "office", "library"
+   * or "hub" (the hex Hub/Office/Library, `HexRooms.ts`'s own `roomView`), or a mission room.
    * A mission room never matches by a raw `mission:<slug>` key: `id` is the server's opaque
    * hash of that key (`projectWorld`'s `publicId`), so a client never sees the slug it was
    * hashed from (issue #89 review, fix 2). It matches instead by the room's own displayed
@@ -404,14 +438,8 @@ export class BuildingLayout implements LayoutStrategy {
   roomView(name: string): RoomView | null {
     const query = name.trim().toLowerCase();
     if (!query) return null;
-    let slot: RoomSlot | null = null;
-    if (ROOM_KINDS.includes(query)) {
-      const record = this.rooms.find((room) => room.kind === query);
-      if (record) slot = slotFor(record.index);
-    }
-    if (slot) return roomViewFromSlot(slot);
     // Issue #259: a mission war room is a hex room now — framed the same way `HexRooms.ts`
-    // already frames the Hub/Office/Library (`hexRoomView`), not `roomViewFromSlot`.
+    // already frames the Hub/Office/Library (`hexRoomView`), not the old rect `roomViewFromSlot`.
     const byId = [...this.missionRooms.values()].find((room) => room.id === name);
     if (byId) return hexRoomView(byId.hexRoom);
     // Two mission rooms can slugify to the same title (issue #89 review, fix round 2): picking
@@ -420,60 +448,53 @@ export class BuildingLayout implements LayoutStrategy {
     const byTitle = [...this.missionRooms.values()].filter((room) => slugify(room.title) === query);
     if (byTitle.length === 1) return hexRoomView(byTitle[0]!.hexRoom);
     if (byTitle.length > 1) console.debug(`roomView("${name}") matches more than one mission room by title; none resolved`);
-    // Issue #218 step 2/3 review: `#room=hub` / `#room=hex-office` frame the new hex rooms,
-    // the same way `#room=office` already frames the rect one. Checked last so none of the
-    // names above (`office` included: the rect room keeps that name, see `HexRooms.ts`) ever
-    // resolve differently than before.
+    // Issue #218 step 2/3, issue #260 steps 2+3: `#room=hub` / `#room=hex-office` frame the
+    // hex rooms; `#room=office` is now a `hex-office` alias (`HexRooms.ts`'s own `roomView`),
+    // the rect office it used to frame being gone. Checked last so none of the names above
+    // ever resolve differently than before.
     return this.hexOffice.roomView(query);
   }
 
   /**
    * Where the fixed desk-view camera (issue #161, key `H`) sits: behind the user's own desk,
    * a little lower than a standing first-person pose, looking at the queue in front of it.
-   * Null without a rented office room yet (graceful degradation, rule 3) — a layout only ever
-   * has one at construction, so this should not happen in practice, but a fresh office render
-   * mid-rebuild is still handled the same way `roomView` handles an unknown name.
+   * Issue #260 step 7b: the hex office's own desk (`hexDeskGeometry.ts`), built once at
+   * construction and never rented — always present, so this never returns null any more.
    */
   deskView(): { position: THREE.Vector3; lookAt: THREE.Vector3; fov: number } | null {
-    if (!this.rooms.some((room) => room.kind === 'office')) return null;
-    return deskCameraPose();
+    return hexDeskCameraPose(this.hexOffice.layout);
   }
 
   /**
    * Issue #243: the desk-view camera sits essentially where the user's own chair is
-   * (`deskGeometry.ts`'s `DESK_SEAT_OFFSET`, "inside the chair, not on top of the desk"), close
-   * enough and low enough that an 82°-FOV frustum wide enough for the queue (`deskView`'s own
-   * fov, issue #199) always catches the chair's back/seat/pole in its lower half — no pose-only
-   * fix clears the chair without re-shrinking that offset and re-breaking #199's queue framing.
-   * The chair itself (`Desk.ts`'s `createDesk`, named `'desk-chair'`) is hidden instead while in
-   * desk mode: a no-op without a rented office room yet, or if the chair is not found (a layout
-   * mid-rebuild), the same graceful degradation every other desk-view method here uses.
+   * (`DESK_SEAT_OFFSET`, "inside the chair, not on top of the desk"), close enough and low
+   * enough that the hex desk's own FOV (`HEX_DESK_CAMERA_FOV`) always catches the chair's
+   * back/seat/pole in its lower half. The chair itself (`Desk.ts`'s `createDesk`, named
+   * `'desk-chair'`, `HexRooms.ts`'s `buildHexOfficeDesk`) is hidden instead while in desk mode.
    */
   setDeskChairVisible(visible: boolean): void {
-    const office = this.rooms.find((room) => room.kind === 'office');
-    const chair = office?.group.getObjectByName('desk-chair');
+    const chair = this.hexOffice.group.getObjectByName('desk-chair');
     if (chair) chair.visible = visible;
   }
 
   /**
    * World corners of each desk monitor's bezel, left then right (issue #161 review): lets the
    * label declutter keep a queued agent's label clear of them in desk mode. Delegates to the
-   * pure geometry in `deskGeometry.ts` — the one source of where a monitor actually sits, the
+   * pure geometry in `hexDeskGeometry.ts` — the one source of where a monitor actually sits, the
    * same one the desk camera pose above and the mesh builder in `deskMonitors.ts` read, so
    * none of the three can drift from the others (review round 2's own root cause).
    */
   deskMonitorCorners(): THREE.Vector3[][] {
-    return monitorWorldCorners();
+    return hexMonitorWorldCorners(this.hexOffice.layout);
   }
 
   /**
    * Where a selected queued agent walks to address Gabriel directly (issue #162, desk mode
-   * only): a fixed spot in front of the desk, standing, facing the desk camera. Null without a
-   * rented office room yet — the same graceful degradation `deskView` uses.
+   * only): a fixed spot in front of the desk, standing, facing the desk camera. The hex
+   * office's own desk is always present (never rented), so this never returns null any more.
    */
   deskTalkSpot(): Seat | null {
-    if (!this.rooms.some((room) => room.kind === 'office')) return null;
-    const pose = deskTalkSpotPose();
+    const pose = hexDeskTalkSpotPose(this.hexOffice.layout);
     return { key: 'desk-talk-spot', position: pose.position, lookAt: pose.lookAt, posture: 'standing' };
   }
 
@@ -488,48 +509,27 @@ export class BuildingLayout implements LayoutStrategy {
 
   /**
    * The room (building or mission) whose floor contains a world point, or null between rooms
-   * or outside the building (issue #175, double-click a room in isometric). Pure rect
-   * containment: cheap, and exact since rooms never overlap.
+   * or outside the building (issue #175, double-click a room in isometric). Issue #260 steps
+   * 2+3: every room (Hub, Office, Library and every war room) is a hex polygon now; the old
+   * rect-room scan is gone along with `addRoom`.
    */
   roomAt(x: number, z: number): RoomView | null {
-    const inside = (rect: Rect) => x >= rect.minX && x <= rect.maxX && z >= rect.minZ && z <= rect.maxZ;
-    for (const record of this.rooms) {
-      const slot = slotFor(record.index);
-      // `kind` (issue #239): lets a caller special-case the library door (it swaps to the
-      // library's own scene) without this layout needing to know what a "scene swap" is.
-      if (inside(slot.rect)) return { ...roomViewFromSlot(slot), kind: record.kind };
-    }
-    // Issue #259: a mission war room is a hex room; `inside(rect)` only ever fit a rectangle.
     for (const room of this.missionRooms.values()) {
       if (pointInPolygon({ x, z }, room.hexRoom.corners)) return hexRoomView(room.hexRoom);
     }
-    // Issue #249: a double-click in isometric over the hex structure (Hub or Office) did
-    // nothing — this only ever scanned the rect rooms above. Checked last, so it never changes
-    // which room a point inside a rect room resolves to.
     return this.hexOffice.roomAt(x, z);
   }
 
   /**
-   * Every wall in the building, as a flat 2D collision list (issue #194): the hall's own
-   * outer walls, every rented room's walls (with the doors it has grown), and every war
-   * room's walls. The same `rect`/`doors` pairs `rebuildHallWalls`, `rebuildRoomWalls` and
-   * `syncWorldRooms` already build real wall meshes from, run through `wallRects` instead
-   * of `buildWalls` — so the collision list can never drift from what actually draws.
-   * `ViewController` feeds this to `FreeCamera`'s ground-walk every frame; empty before any
-   * room exists, which `setWallColliders([])` already treats as unobstructed.
+   * Every wall in the building, as a flat 2D collision list (issue #194). `ViewController`
+   * feeds this to `FreeCamera`'s ground-walk every frame. Issue #260 steps 2+3: every war
+   * room's walls (and its stair's own open edge) come from the hex structure's own shared
+   * `hex-walls` zone, the same as the Hub/Office/Library — `hexWallColliders(layout)` already
+   * covers every room in `layout.rooms`, wings included, so there is no rect hall or rented
+   * room left to add on top of it.
    */
   wallColliders(): WallRect[] {
-    const hallDoors = [HALL_CONNECTOR_DOOR, ...this.rooms.map((room) => slotFor(room.index)).filter((slot) => slot.ring === 0).map(matchingDoor)];
-    const colliders: WallRect[] = [...wallRects(HALL, hallDoors)];
-    for (const record of this.rooms) {
-      const slot = slotFor(record.index);
-      colliders.push(...wallRects(slot.rect, [slot.door, ...record.extraDoors]));
-    }
-    // Issue #259: every war room's walls (and its stair's own open edge) come from the hex
-    // structure's own shared `hex-walls` zone now, the same as the Hub/Office/Library —
-    // `hexWallColliders(layout)` already covers every room in `layout.rooms`, wings included.
-    colliders.push(...this.hexOffice.wallColliders);
-    return colliders;
+    return [...this.hexOffice.wallColliders];
   }
 
   /**
@@ -801,10 +801,11 @@ export class BuildingLayout implements LayoutStrategy {
       .filter((state) => state.target === 'queue')
       .sort((a, b) => compareWaits(a.agent.extras, b.agent.extras) || (a.queuedAt ?? 0) - (b.queuedAt ?? 0));
     const spots = this.keysOfType('queue');
-    while (spots.length < waiting.length) {
-      this.addRoom('office');
-      spots.splice(0, spots.length, ...this.keysOfType('queue'));
-    }
+    // Issue #260 step 7b: the hex office's own ~30 queue spots are fixed (never rented, round
+    // 7's own "simplicity and beauty") — past that, a further waiting agent gets its own
+    // overflow spiral spot in the office itself, the same pattern the Hub's idle corner and the
+    // Library's own shelves already use past their fixed furniture.
+    while (spots.length < waiting.length) spots.push(this.allocateOverflowQueueStation());
     // A meeting without a wait also queues, but only fresh and aging waits count for you
     this.showQueueCount(waiting.filter((state) => queuesForYou(state.agent.extras)).length);
     const moves: LayoutMove[] = [];
@@ -820,9 +821,11 @@ export class BuildingLayout implements LayoutStrategy {
     return moves;
   }
 
-  /** The sign under the portrait of the first office: "N waiting", hidden when nobody waits. */
+  /** The sign at the hex office's own desk: "N waiting", hidden when nobody waits. Issue #260
+   * step 7b: the hex desk's own queue-count sign (`HexRooms.ts`'s `buildHexOfficeDesk`), not the
+   * rect office's. */
   private showQueueCount(count: number): void {
-    const sign = this.rooms.find((room) => room.kind === 'office')?.group.getObjectByName(QUEUE_COUNT_SIGN) as CSS2DObject | undefined;
+    const sign = this.hexOffice.group.getObjectByName(QUEUE_COUNT_SIGN) as CSS2DObject | undefined;
     if (!sign || sign.userData.queueCount === count) return;
     sign.userData.queueCount = count;
     sign.element.textContent = `${count} waiting`;
@@ -845,20 +848,17 @@ export class BuildingLayout implements LayoutStrategy {
       : this.keysOfType(type);
     const free = keys.find((key) => !this.stations.get(key)!.occupied);
     if (free) return this.claim([free], type);
-    const rentable = ROOM_FOR_STATION[type];
-    if (rentable) {
-      this.addRoom(rentable);
-      return this.claimOfType(type);
-    }
-    // Issue #260/#261 review: no more rented 'desks'/'lab'/'lounge'/'library' rooms — the hex
-    // Hub's own fixed capacity (spare desks, the kitchen/play corner) and the hex Library's own
-    // two shelves are the first line of overflow past the hall's own stations, and neither ever
-    // grows a new rented room (round 7: "simplicity and beauty"). Review-261 finding 1: past
-    // THAT fixed capacity, this used to hand the same already-occupied station to every later
-    // agent — real stacking. Every further agent instead gets its own fresh spot, grown on
-    // demand from a deterministic, collision-free spiral (never reused, never shared):
-    // research keeps growing inside the Library itself (finding 2: never the rect room),
+    // Issue #260 step 7b: no more rented 'office'/'desks'/'lab'/'lounge'/'library' rooms — the
+    // hex office's own ~30 fixed queue spots, the hex Hub's own fixed capacity (spare desks, the
+    // kitchen/play corner) and the hex Library's own two shelves are the first line of overflow
+    // past the hall's own stations, and none of them ever grows a new rented room (round 7:
+    // "simplicity and beauty"). Review-261 finding 1: past THAT fixed capacity, this used to
+    // hand the same already-occupied station to every later agent — real stacking. Every
+    // further agent instead gets its own fresh spot, grown on demand from a deterministic,
+    // collision-free spiral (never reused, never shared): queueing keeps growing in the office
+    // itself, research keeps growing inside the Library itself (finding 2: never the rect room),
     // everything else piles into the Hub's own idle corner, the same terminal case as before.
+    if (type === 'queue') return this.claim([this.allocateOverflowQueueStation()], type);
     if (type === 'researching') return this.claim([this.allocateOverflowResearchingStation()], type);
     if (type !== 'idle') return this.claimOfType('idle');
     return this.claim([this.allocateOverflowIdleStation()], 'idle');
@@ -891,6 +891,19 @@ export class BuildingLayout implements LayoutStrategy {
     return key;
   }
 
+  /** Issue #260 step 7b: the next overflow queue spot, past the hex office's own ~30 fixed
+   * queue spots — a fresh station every call, never an existing one. Same shared-cursor
+   * contract as `allocateOverflowIdleStation`. */
+  private allocateOverflowQueueStation(): string {
+    const key = `hex-office-queue-overflow-${this.overflowQueueCount}`;
+    const office = this.hexOffice.layout.office;
+    const { point: spot, nextIndex } = officeOverflowQueueSpot(office, this.overflowQueueCount);
+    this.overflowQueueCount = nextIndex;
+    const lookAt = hexDeskCameraPose(this.hexOffice.layout).position;
+    this.stations.set(key, station('queue', new THREE.Vector3(spot.x, 0, spot.z), lookAt));
+    return key;
+  }
+
   private claim(keys: string[], type: string): string {
     const free = keys.find((key) => !this.stations.get(key)!.occupied);
     if (!free) {
@@ -920,129 +933,6 @@ export class BuildingLayout implements LayoutStrategy {
     }
     state.agent = agent;
     return state;
-  }
-
-  private addRoom(kind: RoomKind, save = true): void {
-    const index = this.rooms.length;
-    const slot = slotFor(index);
-    const built = buildRoom(kind, slot, index, [], roomTitle(kind, this.roomKinds));
-    const record: RoomRecord = { kind, index, group: built.group, extraDoors: [] };
-    this.rooms.push(record);
-    this.scene.add(built.group);
-    if (kind === 'office') showLoadedPortrait(built.group);
-    // Every room label of the scene draws in one call
-    roomLabelBatchFor(this.scene).collect(built.group);
-    for (const [key, station] of built.stations) this.stations.set(key, station);
-
-    if (slot.ring === 0) this.rebuildHallWalls();
-    else {
-      // Open the wall of the room inside this one, so the new room has a way in
-      const inner = this.rooms[index - 7];
-      inner.extraDoors.push(matchingDoor(slot));
-      this.rebuildRoomWalls(inner);
-    }
-    if (save) this.saveRooms();
-  }
-
-  private rebuildRoomWalls(room: RoomRecord): void {
-    const slot = slotFor(room.index);
-    const old = room.group.getObjectByName('room-walls');
-    if (old) room.group.remove(old);
-    const walls = buildWalls(slot.rect, [slot.door, ...room.extraDoors]);
-    walls.name = 'room-walls';
-    room.group.add(walls);
-  }
-
-  /** The hall keeps its furniture; its four side walls are replaced by walls with a door for each attached room. */
-  private hideHallSideWalls(): void {
-    const original = this.scene.getObjectByName(OFFICE_WALLS);
-    original?.children.forEach((child) => {
-      if (!(child instanceof THREE.Mesh) || !(child.geometry instanceof THREE.BoxGeometry)) return;
-      if (child.geometry.parameters.height === OFFICE.height) child.visible = false;
-    });
-  }
-
-  private rebuildHallWalls(): void {
-    if (this.hallWalls) this.scene.remove(this.hallWalls);
-    // Issue #260 (step 7a part b): the hall's one permanent opening onto the hex Hub's own
-    // walkway, always present, not conditional on a rented room. Issue #259: besides that, the
-    // mission wing is a separate hex structure, reached only through the Hub — the rest of the
-    // hall's doors are only ever its ring-0 rented rooms.
-    const doors = [HALL_CONNECTOR_DOOR, ...this.rooms.map((room) => slotFor(room.index)).filter((slot) => slot.ring === 0).map(matchingDoor)];
-    this.hallWalls = buildWalls(HALL, doors, OFFICE.height, ['south', 'west']);
-    this.hallWalls.name = 'building-hall-walls';
-    // Its own zone: the overview lowers the hall walls like the room walls
-    markStatic(this.hallWalls, { zone: 'hall-walls', overviewLower: OFFICE.height });
-    this.scene.add(this.hallWalls);
-  }
-
-  /**
-   * One-time migration (issue #191): today's single building's room list (the legacy bare
-   * `BUILDING_STORAGE_KEY`) becomes the first specific floor ever focused, so none of a user's
-   * already-grown rooms are lost once floors exist. `ALL_FLOORS` (`this.floor` unset) never
-   * migrates: it keeps reading the legacy key directly, same as before floors existed — the
-   * migration only matters the first time a user actually narrows to one floor. A marker key,
-   * not a legacy-key scan, makes this run at most once ever, for whichever floor that first is;
-   * a floor that already has its own room list is never overwritten, and the legacy key itself
-   * is left behind, read but never deleted or rewritten (review: a dual-read path was explicitly
-   * ruled out by the design, but "leave the key behind" still means never touching it).
-   *
-   * Not covered (issue #191 review, documented rather than fixed): a floor renamed after a user
-   * already grew its room list there — the remote-naming revision renamed every repo with a
-   * remote, `projects/agents-office` to `gabriel-amyot/agents-office` for example — has no
-   * migration from the old `floorStorageKey` to the new one. The client never sees a repo's raw
-   * directory path (S4), so it has no way to recompute what the old parent-dir-qualified name
-   * would have been from the new one; only the server, which resolved both, could have made
-   * that link, and it only ever hands the client the final name. A renamed floor's grown rooms
-   * (beyond office and library) regrow from scratch under the new name, the same cold-start
-   * experience a floor gets the first time it is ever focused.
-   */
-  private migrateLegacyRooms(): void {
-    if (this.floor === undefined) return;
-    try {
-      if (this.storage?.getItem(ROOMS_MIGRATED_KEY)) return;
-      const legacy = this.storage?.getItem(BUILDING_STORAGE_KEY);
-      const already = this.storage?.getItem(floorStorageKey(this.floor));
-      if (legacy && !already) this.storage?.setItem(floorStorageKey(this.floor), legacy);
-      this.storage?.setItem(ROOMS_MIGRATED_KEY, this.floor);
-    } catch {
-      // Storage full or blocked: the building still works for this page, just without migrated rooms
-    }
-  }
-
-  /**
-   * Remembered rooms, one kind each, the office always first. A `kind@<tag>` entry is a
-   * retired per-workspace desk room (roadmap item 20, superseded by floors, #118): it is
-   * dropped, without error, and its sessions resettle in the shared pool.
-   *
-   * The office is Gabriel's lobby, not this floor's own room (issue #192: he has one office,
-   * never one per floor) — every floor's own stored list keeps it anyway, for the same reason
-   * every floor's building keeps rebuilding it at index 0, but a malformed or pre-office
-   * stored list must never leave it out: `addRoom` only ever runs for what this returns, so
-   * this is the one place "the office always renders" actually has to hold.
-   */
-  private rememberedRooms(): RoomKind[] {
-    let stored: RoomKind[];
-    try {
-      const parsed: unknown = JSON.parse(this.storage?.getItem(floorStorageKey(this.floor)) ?? '[]');
-      const kinds = Object.keys(ROOM_STATION_TYPE);
-      stored = !Array.isArray(parsed) ? [] : parsed
-        .filter((entry): entry is string => typeof entry === 'string')
-        .slice(0, 200)
-        .filter((entry) => !entry.includes('@'))
-        .filter((kind): kind is RoomKind => kinds.includes(kind));
-    } catch {
-      stored = [];
-    }
-    return stored[0] === 'office' ? stored : ['office', ...stored.filter((kind) => kind !== 'office')];
-  }
-
-  private saveRooms(): void {
-    try {
-      this.storage?.setItem(floorStorageKey(this.floor), JSON.stringify(this.rooms.map((room) => room.kind)));
-    } catch {
-      // Storage full or blocked: the building still works for this page
-    }
   }
 
   /** A remembered peak for one mission id, read back when that room is (re)built. A

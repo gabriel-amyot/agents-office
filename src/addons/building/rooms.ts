@@ -1,56 +1,14 @@
 import * as THREE from 'three';
-import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { getToonMaterial } from '../../utils/Materials.js';
 import { Colors } from '../../utils/Colors.js';
 import type { Station } from '../../scene/Office.js';
 import { markStatic } from '../../scene/StaticMerge.js';
 import { OFFICE } from '../../utils/Constants.js';
-import { DOOR_WIDTH, ROOM_SIZE, doorPoint, type Door, type Rect, type RoomSlot, type Side, wallPieces } from './RoomPlanner.js';
-import { roomLabel } from './roomLabels.js';
-import { roomFurnishing, type RoomPlan } from './furnishing.js';
+import { DOOR_WIDTH, doorPoint, type Door, type Rect, type Side, wallPieces } from './RoomPlanner.js';
 import type { WallRect } from '../../layout/LayoutStrategy.js';
 export type { WallRect };
 
 export * from './roomLabels.js';
-
-/**
- * Issue #260 (step 7a): `desks`, `lab` and the numbered `lounge` are gone — the rented
- * overflow-room system they lived in (`RoomPlanner.ts`'s `FIRST_RING`/`slotFor`) now serves
- * only `office` (the user's own room, plus an overflow waiting room past 20 or so queued
- * agents) and `library` (unreachable in practice: `BuildingLayout.ts`'s own hex Library, issue
- * #258, already answers every `researching` claim before this would ever rent one). Overflow
- * past the hall's own fixed desk/test-station/idle-corner capacity goes to the hex Hub's own
- * spare desks and kitchen/play corner instead of renting a new room (`BuildingLayout.ts`'s
- * `claimOfType`).
- */
-export type RoomKind = 'office' | 'library';
-
-/** The station type each room kind adds. 'queue' spots are where agents wait for the user. */
-export const ROOM_STATION_TYPE: Record<RoomKind, string> = {
-  office: 'queue',
-  library: 'researching',
-};
-
-export const ROOM_TITLE: Record<RoomKind, string> = {
-  office: 'Your office',
-  library: 'Library',
-};
-
-const FLOOR_TINT: Record<RoomKind, number> = {
-  office: 0x8a6f5a,
-  library: 0xa58a6a,
-};
-
-export function roomFloorColor(kind: RoomKind): number {
-  return FLOOR_TINT[kind];
-}
-
-/** The room name: a later office is a numbered overflow waiting room. */
-export function roomTitle(kind: RoomKind, earlierKinds: RoomKind[]): string {
-  // Only the first office is the user's; later ones are overflow waiting rooms
-  if (kind === 'office' && earlierKinds.includes('office')) return `Waiting room ${earlierKinds.filter((earlier) => earlier === 'office').length + 1}`;
-  return ROOM_TITLE[kind];
-}
 
 /** Issue #176: every room's walls are as tall as the main room's (`OFFICE.height`), not their own shorter constant. */
 export const WALL_HEIGHT = OFFICE.height;
@@ -106,13 +64,6 @@ export class RoomFrame {
   }
 }
 
-export interface BuiltRoom {
-  kind: RoomKind;
-  slot: RoomSlot;
-  group: THREE.Group;
-  stations: Map<string, Station>;
-}
-
 export function place(group: THREE.Group, object: THREE.Object3D, position: THREE.Vector3, rotationY: number): void {
   object.position.copy(position);
   object.rotation.y = rotationY;
@@ -121,23 +72,6 @@ export function place(group: THREE.Group, object: THREE.Object3D, position: THRE
 
 export function station(type: string, position: THREE.Vector3, lookAt: THREE.Vector3, posture?: Station['posture']): Station {
   return { type, position, lookAt, occupied: false, ...(posture ? { posture } : {}) };
-}
-
-/**
- * Put walls and door frames in the shared cutaway zone: they draw merged, and
- * the overview lowers the zone so the room floors show (`applyCutaway`).
- */
-export function markCutaway(root: THREE.Object3D): void {
-  markStatic(root, { zone: 'room-walls', castShadow: false, overviewLower: WALL_HEIGHT });
-}
-
-/**
- * Door frames get their own cutaway zone: in the overview they drop to
- * `OVERVIEW_DOOR_HEIGHT`, so the posts and the lintel stand above the low walls
- * and a doorway reads from above.
- */
-export function markDoorCutaway(root: THREE.Object3D): void {
-  markStatic(root, { zone: 'door-frames', castShadow: false, overviewLower: DOOR_FRAME_TOP, overviewHeight: OVERVIEW_DOOR_HEIGHT });
 }
 
 /** Low walls with gaps at the doors, so the overview can see in. */
@@ -241,78 +175,3 @@ export function doorFrame(rect: Rect, door: Door, color: number): THREE.Group {
 
 /** The CSS2D sign under the portrait that counts the queue; `BuildingLayout` sets its text. */
 export const QUEUE_COUNT_SIGN = 'queue-count-sign';
-
-function sign(text: string, position: THREE.Vector3): CSS2DObject {
-  const element = document.createElement('div');
-  element.className = 'desk-sign';
-  element.textContent = text;
-  Object.assign(element.style, {
-    background: 'rgba(30, 32, 48, 0.85)', color: '#f5f0e8', padding: '2px 8px', borderRadius: '4px',
-    font: '600 12px system-ui, sans-serif', whiteSpace: 'nowrap', pointerEvents: 'none',
-  });
-  const label = new CSS2DObject(element);
-  label.position.copy(position);
-  return label;
-}
-
-/**
- * Turn a room plan into objects: each piece from the furniture library at its
- * place (named in `userData.piece`), each spot a station, each sign a CSS2D sign.
- */
-function furnish(group: THREE.Group, frame: RoomFrame, plan: RoomPlan, rect: Rect, stations: Map<string, Station>, key: (n: number) => string): void {
-  for (const placement of plan.pieces) {
-    const object = placement.piece.create();
-    object.userData.piece = placement.piece.name;
-    place(group, object, frame.point(placement.a, placement.d, placement.y ?? 0), frame.faceDoor + (placement.turn ?? 0));
-  }
-  plan.spots.forEach((spot, n) => {
-    stations.set(key(n), station(spot.type, frame.point(spot.a, spot.d), frame.point(...spot.look), spot.posture));
-  });
-  for (const signPlan of plan.signs) {
-    const at = frame.point(signPlan.a, signPlan.d, signPlan.y);
-    if (signPlan.role === 'you') {
-      // A detail sign: it shows when zoomed in or hovered, so it does not cover the queue in the overview
-      const you = sign('You', at);
-      you.userData.detailSign = { rect: { ...rect }, hoverOnly: false };
-      group.add(you);
-    } else {
-      // Hidden until someone waits
-      const count = sign('', at);
-      count.name = QUEUE_COUNT_SIGN;
-      count.userData.queueCount = 0;
-      count.visible = false;
-      group.add(count);
-    }
-  }
-}
-
-/** Build one room: floor, low walls, a framed door, a room label, furniture and its stations. */
-export function buildRoom(kind: RoomKind, slot: RoomSlot, index: number, extraDoors: Door[], title?: string): BuiltRoom {
-  const group = new THREE.Group();
-  group.name = `room-${index}-${kind}`;
-  // Rooms lie outside the hall lamps' cone: their merged furniture casts no shadow
-  markStatic(group, { zone: 'rooms', castShadow: false });
-  const frame = new RoomFrame(slot.rect, slot.door);
-  const stations = new Map<string, Station>();
-  const type = ROOM_STATION_TYPE[kind];
-  const key = (n: number) => `room${index}_${type}_${n}`;
-
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_SIZE, ROOM_SIZE), getToonMaterial(FLOOR_TINT[kind]));
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.set((slot.rect.minX + slot.rect.maxX) / 2, 0.005, (slot.rect.minZ + slot.rect.maxZ) / 2);
-  floor.receiveShadow = true;
-  floor.userData.floor = true;
-  group.add(floor);
-  const walls = buildWalls(slot.rect, [slot.door, ...extraDoors]);
-  walls.name = 'room-walls';
-  markCutaway(walls);
-  group.add(walls);
-  const doorway = doorFrame(slot.rect, slot.door, FLOOR_TINT[kind]);
-  markDoorCutaway(doorway);
-  group.add(doorway);
-  group.add(buildCeiling(slot.rect));
-  group.add(roomLabel(title ?? roomTitle(kind, []), frame.point(0, ROOM_SIZE / 2), slot.rect));
-
-  furnish(group, frame, roomFurnishing(kind, { doorAlong: frame.doorAlong, usersOffice: index === 0 }), slot.rect, stations, key);
-  return { kind, slot, group, stations };
-}

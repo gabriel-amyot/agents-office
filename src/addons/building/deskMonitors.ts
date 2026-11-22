@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { getToonMaterial } from '../../utils/Materials.js';
 import { Colors } from '../../utils/Colors.js';
-import { MONITOR_A_OFFSET, MONITOR_BEZEL_MARGIN, MONITOR_HEIGHT, MONITOR_WIDTH, monitorPose, monitorWorldCorners } from './deskGeometry.js';
+import { MONITOR_A_OFFSET, MONITOR_BEZEL_MARGIN, MONITOR_HEIGHT, MONITOR_WIDTH } from './deskConstants.js';
+import { hexMonitorPose, hexMonitorWorldCorners } from './hexDeskGeometry.js';
 import { triageQueue } from '../../ui/attention.js';
 import { registerExtension, type OfficeExtension, type World } from '../../extensions.js';
 import type { ManagedAgent } from '../../agents/AgentManager.js';
@@ -12,19 +13,20 @@ import type { ManagedAgent } from '../../agents/AgentManager.js';
  * panel's waiting list (core, always available). Canvas textures, the same cheap pattern as
  * the Jira wall board (`plugins/jira/client.ts`) and the GitHub cards: a frame mesh plus one
  * textured face, never merged into the static batch (a dynamic texture redraws). Where they
- * sit and face is `deskGeometry.ts`'s own job — this file only draws and mounts them.
+ * sit and face is `hexDeskGeometry.ts`'s own job — this file only draws and mounts them.
  *
- * The office room is always the first rented room (`room-0-office`, `rooms.ts`'s own naming;
- * the Jira wall board makes the same assumption for its slot). Without that room in the scene
- * yet, neither monitor mounts (rule 3, graceful degradation) — the same guard the Jira board
- * itself uses.
+ * Issue #260 step 7b: repointed from the rect office's `room-0-office` to the hex office's
+ * own desk group (`hex-office-desk`, `HexRooms.ts`'s `buildHexOfficeDesk`), which the hex
+ * structure always builds at construction — no "rented room" to wait for any more. Without
+ * that group in the scene yet (a layout mid-rebuild), neither monitor mounts (rule 3,
+ * graceful degradation) — the same guard this file always used.
  */
 
-const OFFICE_ROOM_NAME = 'room-0-office';
+const OFFICE_ROOM_NAME = 'hex-office-desk';
 const MONITOR_CANVAS = { width: 360, height: 220 };
 const MAX_ROWS = 5;
 
-export { monitorWorldCorners };
+export { hexMonitorWorldCorners as monitorWorldCorners };
 
 function canvasEl(width: number, height: number): HTMLCanvasElement {
   const element = document.createElement('canvas');
@@ -90,7 +92,7 @@ function disposeAll(items: Array<{ dispose(): void }>): void {
 }
 
 function buildMonitor(a: number): MountedMonitor {
-  const { position, rotationY } = monitorPose(a);
+  const { position, rotationY } = hexMonitorPose(a);
   const group = new THREE.Group();
   group.position.copy(position);
   group.rotation.y = rotationY;

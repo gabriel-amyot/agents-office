@@ -14,60 +14,15 @@ import {
 } from './HexPlanner.js';
 export type { ComponentRole, RoomRole } from './HexPlanner.js';
 import { OFFICE } from '../../utils/Constants.js';
-import { HALL } from './RoomPlanner.js';
 
-/** The rect hall's own north wall midpoint (issue #260, step 7a part b): the one side
- * `RoomPlanner.ts`'s `FIRST_RING` never docks a rented room onto (it only ever grows east,
- * south and west) — the hall's one permanently clear wall, so the Hub's own connector never
- * has to fight a rented room for the same opening. */
-const HALL_CONNECTOR_DOOR: HexPoint = { x: (HALL.minX + HALL.maxX) / 2, z: HALL.minZ };
-
-/** World offset of the whole hex structure, clear of the existing rect building (whose rooms
- * grow outward from the origin in every direction) so the two coexist without touching, per
- * step 2's AC ("side by side with the old rect rooms, which keep working unconverted"). */
 /**
- * Issue #260 (step 7a, "the building should read as one"): the hex structure sits just outside
- * the rect building now, not 360 units away on its own continent. `-x, +z` (south-west of the
- * rect hall) is the one direction clear of every rect-room growth ray: `RoomPlanner.ts`'s
- * `FIRST_RING` only ever rents east (`+x`), south (`+z`, fixed `x` range) and west (`-x`, fixed
- * `z` range) — never north — and the office/library sector (0, angle 0°, `+x`) and `tooling`
- * (sector 3, angle 180°, `-x`) sit on opposite sides of the Hub along the x-axis, so a bare x
- * offset alone still risks a busy `tooling` wing crossing back through x = 0 into the rect
- * building's own spread (issue #259's own review). `-x, +z` together keep the Hub's own center,
- * and so every sector's own growth ray, outside the rect-room footprint at any realistic room
- * count on both sides — re-verified empirically (`tests/mission-wing-overlap.test.ts`'s own
- * stress case), not re-derived by hand. Two tests pull against each other along this exact ray:
- * smaller is always better for the real-size default-isometric label-readability test (every
- * hex floor is now tagged `userData.floor`, part c below, so a closer structure means a tighter
- * default frame and taller label plates), but the overlap check only clears past a magnitude
- * that moves with the lattice's own size.
- *
- * Issue #261 review round 2 (design fidelity, the main point): the first design-fidelity pass
- * (`LATTICE_SPACING` 26 -> 23, a bigger `OFFICE_RADIUS`) still read as one-room-wide chains with
- * long bridges, not a mosaic. Two causes, both now fixed together:
- *
- * 1. Mixed radii cannot share one lattice edge-to-edge, no matter how tight the spacing — every
- *    room (Hub, Office, Library, every war room) is the same `ROOM_RADIUS` now (see below), so
- *    `LATTICE_SPACING` can be derived once, honestly, for true edge-to-edge tangency plus one
- *    short bridge gap.
- * 2. The claim algorithm itself (`HexPlanner.claimHexRegion`) already fills whole rings,
- *    sector by sector, nearest-angle first — a true contiguous wedge, verified directly
- *    (`tests/hex-planner.test.ts`). What read as "chains" in the round-2 screenshot was real
- *    wedges that were too THIN to read as a mass at a realistic room count (2-4 war rooms per
- *    wing only reaches ring 1-2, a handful of tiles) stretched across the old spacing's own long
- *    gaps. Tight, edge-to-edge spacing fixes the read without changing the claim algorithm,
- *    which was already correct.
- *
- * Re-measured the same way as before (a linear scan along this exact direction, smallest
- * magnitude that clears the overlap stress case), with one companion change to the stress case
- * itself: `RENTED_ROOM_COUNT` (see that test's own comment) dropped from 25 to 5 — issue #260
- * retired every rentable room kind except `office`'s own overflow waiting room, so a realistic
- * worst case on the rect side is a small handful of waiting rooms, not the old multi-kind rental
- * free-for-all 25 modeled. Honest, not padded: verified against the real-size fixture, whose own
- * `buildRealSizeOffice()` comment already says the rect building never grows past its one office
- * room at all at today's traffic.
+ * World offset of the whole hex structure. Issue #260 step 7b item 5: the rect hall is gone
+ * from the 'building' layout entirely now (step 4: "only build the rect hall for the activity
+ * layout") — the hex building is the whole office, so there is no rect footprint left to sit
+ * clear of. The hex structure centers at the origin, the simplest frame there is: `hexPixel`'s
+ * own `(0, 0)` cell (the Hub, ring 0) already lands at the world origin with no offset at all.
  */
-export const HEX_OFFSET: HexPoint = { x: -28.6, z: 49.9 };
+export const HEX_OFFSET: HexPoint = { x: 0, z: 0 };
 /**
  * Every hex room's own floor/wall circumradius — the Hub, the Office, the Library and every war
  * room, all ONE size (issue #261 review round 2: "mixed radii cannot share one lattice edge to
@@ -131,11 +86,6 @@ export const HEX_WALL_THICKNESS = 0.2;
  * on the lattice is the same `BRIDGE_GAP` (2) now, so `2 * RAMP_LENGTH` must stay within it
  * without the two ramps crossing past the gap's own midpoint. */
 export const RAMP_LENGTH = BRIDGE_GAP / 2 - 0.1;
-/** A separate, more generous clearance for the one-off Hub-to-hall connector
- * (`hallConnectorFor`): that bridge is not bound by the regular lattice's own tight
- * `BRIDGE_GAP` — it only has to clear the rect hall's own rectangular footprint, where a
- * thin margin risks visually clipping the hall's wall. */
-const HALL_CLEARANCE = 3;
 
 function add(a: HexPoint, b: HexPoint): HexPoint {
   return { x: a.x + b.x, z: a.z + b.z };
@@ -315,27 +265,6 @@ export interface HexConnection {
  * meshes and colliders. `hub`/`office`/`library` and the four named ramps stay as a
  * convenience (every caller from steps 2-4 already reads them by name); `rooms`/`connections`
  * generalize over however many wing rooms also exist. */
-/**
- * The Hub's own short walkway out to the rect building (issue #260, step 7a part b: "one short
- * walkway or open passage from the hall to the hub" — the two structures used to sit 360 units
- * apart with no route between them at all). The same up/flat/down shape every room-to-room
- * `HexConnection` already uses, just with the rect hall's own north wall standing in for a
- * second hex room: `hubRamp` climbs from the Hub's own open edge to `WALKWAY_HEIGHT`, `deck`
- * runs flat (issue #261 review finding: a straight single segment here used to cut straight
- * through the hall's own solid south wall whenever the Hub sits diagonally offset from the
- * door, like it does today — `deck` is a polyline instead, bent to stay outside the hall's own
- * footprint the whole way), `hallRamp` comes back down to the hall's own floor height right at
- * its door.
- */
-export interface HallConnector {
-  hubRamp: HexWalkway;
-  /** Every point of the flat walkway, in order, all at `WALKWAY_HEIGHT`: `deck[0]` is
-   * `hubRamp.to`, `deck[deck.length - 1]` is `hallRamp.from`. At least 2 points; more than 2
-   * when the straight line between them would cross the hall's own footprint. */
-  deck: HexPoint[];
-  hallRamp: HexWalkway;
-}
-
 export interface HexOfficeLayout {
   rooms: HexRoomGeometry[];
   connections: HexConnection[];
@@ -347,7 +276,6 @@ export interface HexOfficeLayout {
   /** The office's own stair toward the library (its second open edge). */
   officeLibraryRamp: HexWalkway;
   libraryRamp: HexWalkway;
-  hallConnector: HallConnector;
 }
 
 /** How many more hex rooms each component wing (and the Library) should grow to, this build —
@@ -372,43 +300,6 @@ function rampToward(center: HexPoint, radius: number, toward: HexPoint): { openE
   const edgeMid = edgeMidpoint(center, radius, openEdge);
   const outward = normalize(sub(edgeMid, center));
   return { openEdge, ramp: { from: edgeMid, to: add(edgeMid, scale(outward, RAMP_LENGTH)) } };
-}
-
-/**
- * The Hub's own walkway out to the rect hall (issue #260, step 7a part b; re-routed by the
- * issue #261 review). `rampToward` already finds the nearest edge and the first `RAMP_LENGTH`
- * stretch of the climb. Today's `HEX_OFFSET` sits the Hub diagonally offset from the hall
- * (south-west of it), while the door itself (`HALL_CONNECTOR_DOOR`) sits on the hall's own
- * north wall — a single straight deck between those two points necessarily cuts across the
- * hall's own footprint (the review's own finding: through its solid south wall). This instead
- * bends the deck around the hall, staying outside its bounding box the whole way:
- *
- * 1. `hubRamp.to` (already clear of the hall in both axes — the Hub itself sits outside it).
- * 2. Across to `clearX`, a margin outside whichever side of the hall the Hub sits on (its own
- *    `z` unchanged, so this leg never enters the hall's own `z` range either).
- * 3. Up (or down) `clearX` to `clearZ`, a margin beyond the door's own wall, still outside the
- *    hall's `x` range — clear the whole way.
- * 4. Across, still at `clearZ`, to the door's own `x` — still outside the hall's `z` range.
- * 5. `hallRamp`: the final `RAMP_LENGTH` descent straight into the door.
- *
- * Every leg but the last stays strictly outside the hall's rectangle on at least one axis, by
- * construction — not just for today's particular `HEX_OFFSET`.
- */
-function hallConnectorFor(hub: HexRoomGeometry): HallConnector {
-  const { openEdge, ramp: hubRamp } = rampToward(hub.center, hub.radius, HALL_CONNECTOR_DOOR);
-  hub.openEdges.push(openEdge);
-  const clearX = hub.center.x <= HALL.minX ? HALL.minX - HALL_CLEARANCE
-    : hub.center.x >= HALL.maxX ? HALL.maxX + HALL_CLEARANCE
-    : hubRamp.to.x;
-  const clearZ = HALL.minZ - HALL_CLEARANCE;
-  const bend1: HexPoint = { x: clearX, z: hubRamp.to.z };
-  const bend2: HexPoint = { x: clearX, z: clearZ };
-  const bend3: HexPoint = { x: HALL_CONNECTOR_DOOR.x, z: clearZ };
-  return {
-    hubRamp,
-    deck: [hubRamp.to, bend1, bend2, bend3],
-    hallRamp: { from: bend3, to: HALL_CONNECTOR_DOOR },
-  };
 }
 
 function requestsFor(counts: HexWorldCounts): GrowthRequest[] {
@@ -482,7 +373,6 @@ export function buildHexWorld(counts: HexWorldCounts): HexOfficeLayout {
   const library = byRole('library');
   const hubOffice = connectionBetween(hub, office);
   const officeLibrary = connectionBetween(office, library);
-  const hallConnector = hallConnectorFor(hub);
 
   return {
     rooms: roomList,
@@ -492,7 +382,6 @@ export function buildHexWorld(counts: HexWorldCounts): HexOfficeLayout {
     officeRamp: hubOffice.childRamp,
     officeLibraryRamp: officeLibrary.parentRamp,
     libraryRamp: officeLibrary.childRamp,
-    hallConnector,
   };
 }
 
@@ -518,20 +407,6 @@ export function hexSurfaceHeightAt(layout: HexOfficeLayout, x: number, z: number
     const onDeck = segmentHeightAt(point, connection.parentRamp.to, connection.childRamp.to, WALKWAY_WIDTH, WALKWAY_HEIGHT, WALKWAY_HEIGHT);
     if (onDeck !== null) return onDeck;
   }
-  // Issue #260 (step 7a part b): the Hub's own short walkway out to the rect hall — the same
-  // up/flat/down shape as a room-to-room connection, just ending at the hall's own door instead
-  // of a second hex room.
-  const { hubRamp, deck, hallRamp } = layout.hallConnector;
-  const onHubRamp = segmentHeightAt(point, hubRamp.from, hubRamp.to, WALKWAY_WIDTH, 0, WALKWAY_HEIGHT);
-  if (onHubRamp !== null) return onHubRamp;
-  // Issue #261 review: `deck` is a polyline now (it bends around the hall's own footprint
-  // instead of cutting straight through it) — every consecutive pair is its own flat segment.
-  for (let i = 0; i < deck.length - 1; i++) {
-    const onHallDeck = segmentHeightAt(point, deck[i], deck[i + 1], WALKWAY_WIDTH, WALKWAY_HEIGHT, WALKWAY_HEIGHT);
-    if (onHallDeck !== null) return onHallDeck;
-  }
-  const onHallRamp = segmentHeightAt(point, hallRamp.from, hallRamp.to, WALKWAY_WIDTH, WALKWAY_HEIGHT, 0);
-  if (onHallRamp !== null) return onHallRamp;
   return null;
 }
 
@@ -625,7 +500,7 @@ const HUB_OVERFLOW_MAX_RADIUS = HUB_RADIUS - 1.5;
  * call — never call this twice with the same `index`. */
 export function hubOverflowIdleSpot(hub: HexRoomGeometry, index: number): { point: HexPoint; nextIndex: number } {
   const fixed = hubFurnitureSpots(hub);
-  const avoid = [...fixed.desks, ...fixed.idle].map((spot) => spot.position);
+  const avoid = [...fixed.desks, ...fixed.idle, ...fixed.testing].map((spot) => spot.position);
   return overflowSpiralPoint(hub.center, index, HUB_OVERFLOW_PACKING, HUB_OVERFLOW_MAX_RADIUS, avoid);
 }
 
@@ -646,6 +521,21 @@ export function libraryOverflowResearchingSpot(library: HexRoomGeometry, index: 
   return overflowSpiralPoint(library.center, index, LIBRARY_OVERFLOW_PACKING, LIBRARY_OVERFLOW_MAX_RADIUS, avoid);
 }
 
+const OFFICE_OVERFLOW_PACKING = 0.85;
+const OFFICE_OVERFLOW_MAX_RADIUS = ROOM_RADIUS - 1.5;
+
+/**
+ * The `index`-th overflow queue spot (issue #260 step 7b): past the hex Office's own fixed
+ * queue (`hexQueueSpotWorldPositions`, ~30 spots), a waiting agent gets one of these instead of
+ * the office renting another waiting room the old rect building did. Steers clear of the
+ * office's own center (where the desk/chair/monitor cluster sits, `HEX_OFFICE_DESK`'s own
+ * depth) the same way the Hub and Library overflow spirals steer clear of their own fixed
+ * furniture. Same cursor contract as `hubOverflowIdleSpot`.
+ */
+export function officeOverflowQueueSpot(office: HexRoomGeometry, index: number): { point: HexPoint; nextIndex: number } {
+  return overflowSpiralPoint(office.center, index, OFFICE_OVERFLOW_PACKING, OFFICE_OVERFLOW_MAX_RADIUS, []);
+}
+
 /**
  * The Hub's own fixed furniture layout (issue #260, step 7a part a: overflow past the hall's
  * own desks/test stations/idle corner goes here instead of a rented room). The Hub never grows
@@ -656,9 +546,12 @@ export function libraryOverflowResearchingSpot(library: HexRoomGeometry, index: 
  * placements leave free (`+1` and `+4` from the Hub's first open edge, offset from `+2`/`+3` the
  * same half-way-to-corner distance); idle spots ring the kitchen/play corner itself (`+2`), the
  * "kitchen and play area where idle agents relax" round 7 asked for — no extra furniture mesh,
- * just somewhere to stand near it.
+ * just somewhere to stand near it. Issue #260 step 7b item 4: the last two corners (`+0` and
+ * `+5`, the only ones the desks/kitchen/elevator above leave free) each get one fixed testing
+ * spot — the hex Hub's own replacement for the rect hall's two test stations, which otherwise
+ * had no hex home at all.
  */
-export function hubFurnitureSpots(hub: HexRoomGeometry): { desks: HubFurnitureSpot[]; idle: HubFurnitureSpot[] } {
+export function hubFurnitureSpots(hub: HexRoomGeometry): { desks: HubFurnitureSpot[]; idle: HubFurnitureSpot[]; testing: HubFurnitureSpot[] } {
   const center = hub.center;
   const desks: HubFurnitureSpot[] = [];
   for (const cornerOffset of [1, 4]) {
@@ -677,5 +570,25 @@ export function hubFurnitureSpots(hub: HexRoomGeometry): { desks: HubFurnitureSp
     position: { x: kitchen.x + along.x * spread + (center.x - kitchen.x) * 0.25, z: kitchen.z + along.z * spread + (center.z - kitchen.z) * 0.25 },
     lookAt: center,
   }));
-  return { desks, idle };
+  const testing: HubFurnitureSpot[] = [0, 5].map((cornerOffset) => {
+    const anchor = hubCornerAnchor(hub, cornerOffset);
+    return { position: anchor, lookAt: center };
+  });
+  return { desks, idle, testing };
+}
+
+/**
+ * Where the tool crib stands in the Hub (issue #260 step 7b item 4: it moves out of the rect
+ * hall, its only home until now, into real hub furniture). Every one of the Hub's 6 corners is
+ * already spoken for (`hubFurnitureSpots`'s own desks/kitchen/elevator/testing), so the crib
+ * instead sits against the wall BETWEEN the two testing spots (`+0`/`+5`) — a tool counter
+ * between the two stations that use it, on the one wall segment no corner anchor already
+ * claims. Halfway between the Hub's own center and that wall's midpoint, the same "halfway in"
+ * distance `hubCornerAnchor` already uses for a corner, so it reads as part of the same ring of
+ * furniture rather than crowding the room's own center.
+ */
+export function hubToolCribSpot(hub: HexRoomGeometry): HexPoint {
+  const edgeIndex = (hub.openEdges[0]! + 5) % 6;
+  const mid = edgeMidpoint(hub.center, hub.radius, edgeIndex);
+  return { x: (hub.center.x + mid.x) / 2, z: (hub.center.z + mid.z) / 2 };
 }

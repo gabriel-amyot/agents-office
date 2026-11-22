@@ -12,7 +12,6 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => new Proxy({}, {
   get: () => () => undefined,
   set: () => true,
 })) as never;
-const { createOffice } = await import('../src/scene/Office.js');
 const { addLighting } = await import('../src/scene/SceneSetup.js');
 const { BuildingLayout } = await import('../src/addons/building/BuildingLayout.js');
 const { AgentManager } = await import('../src/agents/AgentManager.js');
@@ -37,9 +36,16 @@ after(() => {
 function buildFocusedFloorOffice() {
   const scene = new THREE.Scene();
   addLighting(scene);
+  // Issue #260 step 7b item 6: this stored legacy room list ('office'/'library'/'lounge'/
+  // 'desks') is swept by `dropLegacyRoomStorage` at construction regardless — kept here only as
+  // the realistic "old stored data a real session might still carry" shape this test's own name
+  // describes, not because anything still reads it.
   const rooms = ['office', 'library', 'lounge', 'desks', 'desks'];
   const store = new Map([['agents-office.building.rooms:agents-office', JSON.stringify(rooms)]]);
-  const layout = new BuildingLayout(scene, createOffice(scene), {
+  // Issue #260 step 7b item 6: `createOffice` (the rect hall) never ran in production for the
+  // 'building' layout (`main.ts`'s own `layoutId === 'activity' ? createOffice(scene) : new
+  // Map()`, step 4) — this fixture now matches that, measuring the hex structure alone.
+  const layout = new BuildingLayout(scene, new Map(), {
     storage: { getItem: (key: string) => store.get(key) ?? null, setItem: () => undefined },
     floor: 'agents-office',
   });

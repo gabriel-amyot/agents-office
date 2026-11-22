@@ -24,7 +24,7 @@ const { chooseViewMode, rememberViewMode, viewStatusText, VIEW_STORAGE_KEY } = a
 const { applyCeilingCut, findCeilings } = await import('../src/scene/Cutaway.js');
 const { createWalls } = await import('../src/furniture/Walls.js');
 const { FrameLoop } = await import('../src/scene/FrameLoop.js');
-const { buildRoom, CEILING_ZONE_NAME } = await import('../src/addons/building/rooms.js');
+const { buildCeiling, CEILING_ZONE_NAME } = await import('../src/addons/building/rooms.js');
 const { slotFor } = await import('../src/addons/building/RoomPlanner.js');
 const registry = await import('../src/layout/registry.js');
 after(() => {
@@ -401,7 +401,9 @@ test('the frame loop shows the ceiling in first person and hides it in the isome
 test('a room\'s own (merged) ceiling also shows in first person and hides in isometric, through a real frame loop (review, #184 round 2)', () => {
   const scene = new THREE.Scene();
   scene.add(createWalls());
-  scene.add(buildRoom('library', slotFor(1), 1, []).group);
+  // Issue #260 steps 2+3: `buildRoom` (the rect room builder) is gone; `buildCeiling` is the
+  // one piece of it this test actually needs, direct from `rooms.ts`.
+  scene.add(buildCeiling(slotFor(1).rect));
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 100);
   camera.position.set(0, 1.7, 5);
   const renderer = {

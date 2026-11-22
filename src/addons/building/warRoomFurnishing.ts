@@ -1,6 +1,33 @@
-import { PIECES } from '../../furniture/index.js';
+import { PIECES, type PieceSpec } from '../../furniture/index.js';
+import type { Posture } from '../../layout/LayoutStrategy.js';
 import { Colors } from '../../utils/Colors.js';
-import type { Placement, SpotPlan } from './furnishing.js';
+
+/** A piece in a hex war room. `turn` is added to the rotation that faces the room's own door
+ * edge: 0 faces it, PI faces away. `edge` is an offset from the room's own open (door) edge —
+ * `missionRooms.ts` resolves `(openEdge + edge) % 6` against the real room and builds a
+ * `HexFrame` for that edge. Issue #260 steps 2+3: the rect office's own `Placement` (and its
+ * `RoomPlan`/`RoomShape`/`SignPlan` neighbors, `furnishing.ts`) is gone along with `buildRoom`;
+ * this is the one shape that survives, since hex war rooms still need it. */
+export interface Placement {
+  piece: PieceSpec;
+  a: number;
+  d: number;
+  /** Height for a piece that hangs on a wall. */
+  y?: number;
+  turn?: number;
+  edge?: number;
+}
+
+export interface SpotPlan {
+  type: string;
+  a: number;
+  d: number;
+  /** The point the agent looks at: a, d and height. */
+  look: [number, number, number];
+  posture?: Posture;
+  /** See `Placement.edge`. */
+  edge?: number;
+}
 
 /** Fewer book colors than the full palette, so a room full of bookshelves still merges cheap. */
 const BOOKSHELF_COLORS = Colors.books.slice(0, 2);
