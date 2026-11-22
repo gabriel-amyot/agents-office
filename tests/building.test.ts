@@ -14,7 +14,7 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => new Proxy({}, {
   get: () => () => undefined,
   set: () => true,
 })) as never;
-const { BuildingLayout, BUILDING_STORAGE_KEY, floorStorageKey, dropLegacyRoomStorage, ROOMS_DROPPED_KEY } = await import('../src/addons/building/BuildingLayout.js');
+const { BuildingLayout } = await import('../src/addons/building/BuildingLayout.js');
 const { testHexWarRoom, combinedBoard } = await import('../src/addons/building/missionRooms.js');
 const { projectWorld } = await import('../server/seam.js');
 
@@ -86,15 +86,6 @@ function setup(storage = new Map<string, string>(), floor?: string) {
     tick: (ms: number) => { clock += ms; wallClock += ms; return layout.update(); },
   };
 }
-
-// --- Floors (issue #118): `floorStorageKey` is still the legacy rect-rooms key shape
-// `dropLegacyRoomStorage` sweeps and `FloorRegistry.ts` cross-checks, even with no rect room
-// left to save under it (issues #260 steps 2+3). ---
-
-test('floorStorageKey namespaces the legacy key by floor; without a floor it stays the legacy key', () => {
-  assert.equal(floorStorageKey('agents-office'), `${BUILDING_STORAGE_KEY}:agents-office`);
-  assert.equal(floorStorageKey(), BUILDING_STORAGE_KEY);
-});
 
 test('an agent that queues for Gabriel seats in the lobby queue regardless of what floor its own extras name: a building never filters its queue by floor', () => {
   const { layout, agent, tick } = setup();
@@ -402,58 +393,10 @@ test('on a specific floor, a mission room with no repo tag at all never builds (
   assert.equal(layout.missionRoomCount, 0);
 });
 
-// --- Issue #260 steps 2+3: BuildingLayout no longer rents rect rooms, so `addRoom`,
-// `saveRooms` and the old `migrateLegacyRooms` are gone — a returning browser's legacy
-// room-kind-list keys are dead data now, swept once by `dropLegacyRoomStorage` instead. ---
-
-function legacyStorage(seed: Record<string, string> = {}) {
-  const store = new Map<string, string>(Object.entries(seed));
-  const backing: Pick<Storage, 'getItem' | 'setItem' | 'length' | 'key' | 'removeItem'> = {
-    getItem: (k) => store.get(k) ?? null,
-    setItem: (k, v) => void store.set(k, v),
-    removeItem: (k) => void store.delete(k),
-    get length() { return store.size; },
-    key: (index) => [...store.keys()][index] ?? null,
-  };
-  return { store, backing };
-}
-
-test('dropLegacyRoomStorage removes the legacy bare key and every floor-scoped key sharing its prefix', () => {
-  const { store, backing } = legacyStorage({
-    [BUILDING_STORAGE_KEY]: JSON.stringify(['office', 'library', 'desks']),
-    [floorStorageKey('agents-office')]: JSON.stringify(['office']),
-    [floorStorageKey('widget-service')]: JSON.stringify(['office', 'lounge']),
-    'agents-office.unrelated-key': 'untouched',
-  });
-  dropLegacyRoomStorage(backing);
-  assert.equal(store.has(BUILDING_STORAGE_KEY), false);
-  assert.equal(store.has(floorStorageKey('agents-office')), false);
-  assert.equal(store.has(floorStorageKey('widget-service')), false);
-  assert.equal(store.get('agents-office.unrelated-key'), 'untouched', 'a key that only shares a prefix loosely is never swept');
-});
-
-test('dropLegacyRoomStorage runs once: a second call leaves other keys written since alone', () => {
-  const { store, backing } = legacyStorage({ [BUILDING_STORAGE_KEY]: '["office"]' });
-  dropLegacyRoomStorage(backing);
-  assert.ok(store.has(ROOMS_DROPPED_KEY));
-  store.set(floorStorageKey('late-floor'), '["office"]'); // written after the sweep, by nothing real any more, but must still survive a second call
-  dropLegacyRoomStorage(backing);
-  assert.equal(store.get(floorStorageKey('late-floor')), '["office"]', 'the marker key skips every call after the first');
-});
-
-test('dropLegacyRoomStorage is a no-op without a storage that can enumerate keys (a minimal test mock, for instance)', () => {
-  assert.doesNotThrow(() => dropLegacyRoomStorage(undefined));
-  assert.doesNotThrow(() => dropLegacyRoomStorage({ getItem: () => null, setItem: () => undefined }));
-});
-
-test('constructing a building sweeps its own legacy storage once, and never rewrites a room list to it afterward', () => {
-  const { store, backing } = legacyStorage({ [floorStorageKey('widget-service')]: JSON.stringify(['office', 'library', 'desks']) });
-  const scene = new THREE.Scene();
-  new BuildingLayout(scene, new Map(), { storage: backing, floor: 'widget-service' });
-  assert.equal(store.has(floorStorageKey('widget-service')), false, 'the stale floor-scoped key is gone');
-  assert.ok(store.has(ROOMS_DROPPED_KEY));
-  assert.equal(store.has(floorStorageKey('widget-service')) || store.has(BUILDING_STORAGE_KEY), false, 'nothing re-seeds a legacy key after construction');
-});
+// Issue #267 review round 1: this layout no longer sweeps or touches the legacy room-kind-list
+// storage at all (`dropLegacyRoomStorage` and its marker key are gone) — that storage is Rooms
+// v1's own live data now, not dead data this layout may clean up. See
+// `tests/layout-cycle.test.ts` for the cross-layout regression this was fixed for.
 
 // --- Issue #126: war-room furniture routes agent activity, in-room first ---
 

@@ -103,6 +103,27 @@ test('the building opens with the user office and the Library, and remembers its
   assert.ok(scene.getObjectByName('building-hall-walls'));
 });
 
+// Issue #267 review round 1: `plugins/floor-library/client.ts` finds a library room by this
+// marker alone — the same one `HexRooms.ts` attaches for the hex layout — so Rooms v1's own
+// rect library must carry it too, with a real door-wall frame and bounds, not a stub.
+test('the library room carries the floor-library plugin\'s marker, with a real door-wall frame and bounds', () => {
+  const { scene } = setup();
+  const marker = scene.getObjectByName('library-room-marker');
+  assert.ok(marker, 'the library room has the marker the floor-library plugin looks for');
+  const frame = marker!.userData.libraryFrame as { doorMid: { x: number; z: number }; inward: { x: number; z: number }; along: { x: number; z: number } };
+  const bounds = marker!.userData.libraryBounds as { minX: number; maxX: number; minZ: number; maxZ: number };
+  assert.ok(frame.doorMid && frame.inward && frame.along, 'the frame has every field the plugin reads');
+  // Issue #120: the library rents the south-east slot (slotFor(1)) — its door sits on that
+  // room's own west wall, so doorMid.x must land exactly on that wall, inside the room's own z span.
+  assert.equal(frame.doorMid.x, bounds.minX);
+  assert.ok(frame.doorMid.z > bounds.minZ && frame.doorMid.z < bounds.maxZ);
+  // inward points from the door into the room (+x, since the door is on the west wall); along
+  // is inward rotated 90°, both unit length — the exact contract `shelfPoint`/`hitRotationY` assume.
+  assert.ok(frame.inward.x > 0);
+  assert.ok(Math.abs(Math.hypot(frame.inward.x, frame.inward.z) - 1) < 1e-9);
+  assert.ok(Math.abs(Math.hypot(frame.along.x, frame.along.z) - 1) < 1e-9);
+});
+
 // --- Floors (issue #118): each floor keeps its own room-kind list under its own key ---
 
 test('floorStorageKey namespaces the legacy key by floor; without a floor it stays the legacy key', () => {

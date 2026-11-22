@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createOffice } from '../src/scene/Office.js';
 import { addLighting } from '../src/scene/SceneSetup.js';
 import { BuildingLayoutV1 } from '../src/addons/building-v1/BuildingLayout.js';
 import { MAX_TOMBSTONES } from '../src/addons/building-v1/missionRooms.js';
@@ -126,11 +127,12 @@ export function buildRealSizeOffice(): { scene: THREE.Scene; manager: AgentManag
   Math.random = seededRandom(163);
   let layout: BuildingLayoutV1;
   try {
-    // Issue #260 step 7b item 6 (already fixed upstream, kept here): `createOffice` (the rect
-    // hall) never runs in production for this layout (`main.ts`'s own
-    // `layoutId === 'activity' ? createOffice(scene) : new Map()`) — an empty stations map,
-    // same as the hex layout's own real-size fixture, is the honest measurement.
-    layout = new BuildingLayoutV1(scene, new Map(), {
+    // Issue #267 review round 1: `createOffice` (the rect hall) does run in production for
+    // Rooms v1 (`main.ts`'s own `layoutId === 'hex' ? new Map() : createOffice(scene)`) —
+    // `hideHallSideWalls` needs the hall it builds (`OFFICE_WALLS`, the desks). An empty
+    // stations map was the hex layout's own fixture; this one matches what Rooms v1 actually
+    // boots with.
+    layout = new BuildingLayoutV1(scene, createOffice(scene), {
       storage: { getItem: (key: string) => store.get(key) ?? null, setItem: () => undefined },
     });
   } finally {

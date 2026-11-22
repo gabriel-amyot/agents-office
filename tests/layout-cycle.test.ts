@@ -58,3 +58,36 @@ test('Rooms v1 and Experimental both ask for the isometric start view; Original 
   assert.equal(registry.defaultViewFor('hex'), 'isometric');
   assert.equal(registry.defaultViewFor('activity'), 'first-person');
 });
+
+// --- Issue #267 review round 1: a visit to Experimental must never touch Rooms v1's own
+// storage. The hex layout used to sweep the shared legacy room-kind-list key on construction
+// (`dropLegacyRoomStorage`, built back when that key really was dead data) — Rooms v1's
+// restore made it live data again, so that sweep would wipe a real room list the first time a
+// browser that has Rooms v1's rooms visits Experimental. Both layouts are constructed directly
+// here (not through the registry) so the same storage object stands in for one browser's
+// `window.localStorage` across a real layout switch. ---
+
+test('visiting Experimental and back never loses Rooms v1\'s own rented rooms', async () => {
+  const THREE = await import('three');
+  const { BuildingLayoutV1 } = await import('../src/addons/building-v1/BuildingLayout.js');
+  const { BuildingLayout } = await import('../src/addons/building/BuildingLayout.js');
+
+  const store = new Map<string, string>();
+  const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value) };
+
+  // Rooms v1 rents past the office and the library (the starter pair every fresh building
+  // opens with) — a third room, directly seeded the same shape `tests/building-v1.test.ts`
+  // already relies on.
+  store.set('agents-office.building.rooms', JSON.stringify(['office', 'library', 'desks']));
+  const v1First = new BuildingLayoutV1(new THREE.Scene(), new Map(), { storage });
+  assert.deepEqual(v1First.roomKinds, ['office', 'library', 'desks']);
+
+  // The same browser's storage, now handed to a freshly constructed hex layout — the same
+  // object `main.ts` would pass from `window.localStorage` on a Shift+L switch to Experimental.
+  new BuildingLayout(new THREE.Scene(), new Map(), { storage });
+  assert.equal(store.get('agents-office.building.rooms'), JSON.stringify(['office', 'library', 'desks']), 'the hex layout never touches Rooms v1\'s storage key');
+
+  // Switching back: a fresh Rooms v1 instance, same storage, must still see its own rooms.
+  const v1Second = new BuildingLayoutV1(new THREE.Scene(), new Map(), { storage });
+  assert.deepEqual(v1Second.roomKinds, ['office', 'library', 'desks']);
+});

@@ -314,5 +314,26 @@ export function buildRoom(kind: RoomKind, slot: RoomSlot, index: number, extraDo
   group.add(roomLabel(title ?? roomTitle(kind, []), frame.point(0, ROOM_SIZE / 2), slot.rect));
 
   furnish(group, frame, roomFurnishing(kind, { doorAlong: frame.doorAlong, usersOffice: index === 0 }), slot.rect, stations, key);
+
+  // Issue #267 review round 1: `plugins/floor-library/client.ts` finds a library room by this
+  // marker alone (`LIBRARY_MARKER_NAME`, `'library-room-marker'`) — the same one the hex
+  // layout's own `HexRooms.ts` attaches to its Library — so the plugin's shelves/NPC attach to
+  // Rooms v1's rect library too, with no plugin-side change and no rect-vs-hex branching there.
+  // `frame.doorAlong` corrects for this room's door sitting off-center on its own wall (a hex
+  // room's door is always centered, so its own frame needs no such correction); this room's
+  // `frame.point` already bakes that correction in everywhere else it is used.
+  if (kind === 'library') {
+    const marker = new THREE.Object3D();
+    marker.name = 'library-room-marker';
+    const doorMid = frame.point(frame.doorAlong, 0);
+    marker.userData.libraryFrame = {
+      doorMid: { x: doorMid.x, z: doorMid.z },
+      inward: { x: frame.inward.x, z: frame.inward.z },
+      along: { x: frame.along.x, z: frame.along.z },
+    };
+    marker.userData.libraryBounds = { minX: slot.rect.minX, maxX: slot.rect.maxX, minZ: slot.rect.minZ, maxZ: slot.rect.maxZ };
+    group.add(marker);
+  }
+
   return { kind, slot, group, stations };
 }
