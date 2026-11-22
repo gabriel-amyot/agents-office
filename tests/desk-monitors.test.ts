@@ -20,7 +20,12 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => new Proxy({}, {
 })) as never;
 const { DeskMonitorsExtension, drawMiniBoard, monitorWorldCorners } = await import('../src/addons/building/deskMonitors.js');
 const { countDrawCalls } = await import('../src/scene/RenderBudget.js');
-const { deskCameraPose, deskTalkSpotPose, queueSpotWorldPositions, rayBlockedByQuad } = await import('../src/addons/building/deskGeometry.js');
+const {
+  hexDeskCameraPose: deskCameraPose,
+  hexDeskTalkSpotPose: deskTalkSpotPose,
+  hexQueueSpotWorldPositions: queueSpotWorldPositions,
+  rayBlockedByQuad,
+} = await import('../src/addons/building/hexDeskGeometry.js');
 after(() => {
   dom.window.close();
   Reflect.deleteProperty(globalThis, 'document');
@@ -29,7 +34,7 @@ after(() => {
 function officeScene(): THREE.Scene {
   const scene = new THREE.Scene();
   const office = new THREE.Group();
-  office.name = 'room-0-office';
+  office.name = 'hex-office-desk';
   scene.add(office);
   return scene;
 }
