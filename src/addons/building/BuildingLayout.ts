@@ -187,6 +187,12 @@ export class BuildingLayout implements LayoutStrategy {
    * rebuild (see `addHexLibraryStations`'s own comment) rather than leaking a fresh one into
    * `RoomLabelBatch` each time. */
   private hexLibraryLabel: THREE.Object3D | undefined;
+  /** Issue #260 step 7b item 4: the hex Office's and Hub's own room labels, same reuse-and-
+   * re-parent pattern as `hexLibraryLabel` above — the rect office's own "Your office" plate
+   * (`furnishing.ts`'s `usersOffice`) went dark when the rect office was deleted in step 3,
+   * and the Hub never had one at all. */
+  private hexOfficeLabel: THREE.Object3D | undefined;
+  private hexHubLabel: THREE.Object3D | undefined;
   /** Issue #261 review (finding 1): how many overflow idle/research spots have been handed out
    * so far — `claimOfType` grows these one at a time (`hubOverflowIdleSpot`/
    * `libraryOverflowResearchingSpot`), never reusing an already-occupied fixed station. Counts
@@ -220,6 +226,42 @@ export class BuildingLayout implements LayoutStrategy {
     this.addHexLibraryStations();
     this.addHexHubStations();
     this.addHexOfficeQueueStations();
+    this.addHexOfficeAndHubLabels();
+  }
+
+  /**
+   * Issue #260 step 7b item 4: wayfinding plates for the hex Office ("Your office", the rect
+   * office's own old text, now the only office there is) and the hex Hub (a short "Hub" name —
+   * the hex structure's own front door, not a named destination the rect building ever had).
+   * Same reuse-and-re-parent shape `addHexLibraryStations` already uses for the Library's own
+   * plate: both rooms are fixed, single cells that never move, so one label each, built once
+   * and just re-parented onto the fresh group every `rebuildHexOffice`, is always still
+   * correctly positioned.
+   */
+  private addHexOfficeAndHubLabels(): void {
+    const officeCorners = this.hexOffice.layout.office.corners;
+    const officeRect: Rect = {
+      minX: Math.min(...officeCorners.map((c) => c.x)),
+      maxX: Math.max(...officeCorners.map((c) => c.x)),
+      minZ: Math.min(...officeCorners.map((c) => c.z)),
+      maxZ: Math.max(...officeCorners.map((c) => c.z)),
+    };
+    const officeCenter = this.hexOffice.layout.office.center;
+    if (!this.hexOfficeLabel) this.hexOfficeLabel = roomLabel('Your office', new THREE.Vector3(officeCenter.x, 0, officeCenter.z), officeRect);
+    this.hexOffice.group.add(this.hexOfficeLabel);
+    roomLabelBatchFor(this.scene).track(this.hexOfficeLabel);
+
+    const hubCorners = this.hexOffice.layout.hub.corners;
+    const hubRect: Rect = {
+      minX: Math.min(...hubCorners.map((c) => c.x)),
+      maxX: Math.max(...hubCorners.map((c) => c.x)),
+      minZ: Math.min(...hubCorners.map((c) => c.z)),
+      maxZ: Math.max(...hubCorners.map((c) => c.z)),
+    };
+    const hubCenter = this.hexOffice.layout.hub.center;
+    if (!this.hexHubLabel) this.hexHubLabel = roomLabel('Hub', new THREE.Vector3(hubCenter.x, 0, hubCenter.z), hubRect);
+    this.hexOffice.group.add(this.hexHubLabel);
+    roomLabelBatchFor(this.scene).track(this.hexHubLabel);
   }
 
   /**
@@ -251,6 +293,11 @@ export class BuildingLayout implements LayoutStrategy {
     });
     this.hexOffice.hubIdleSpots.forEach((spot, i) => {
       this.setStationPreservingOccupancy(`hex-hub-idle-${i}`, station('idle', spot.position, spot.lookAt));
+    });
+    // Issue #260 step 7b item 4: the Hub's own fixed test stations — the rect hall's two test
+    // stations had no hex home at all; same registration shape as the desk/idle spots above.
+    this.hexOffice.hubTestSpots.forEach((spot, i) => {
+      this.setStationPreservingOccupancy(`hex-hub-test-${i}`, station('testing', spot.position, spot.lookAt));
     });
   }
 

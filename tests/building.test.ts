@@ -252,9 +252,20 @@ test('idle agents beyond the hall seats overflow onto the hex hub\'s own idle sp
   assert.ok(seats.some((seat) => seat.key.startsWith('hex-hub-idle-')), 'the overflow idle spots are the hub\'s own');
 });
 
-test('testing overflow past the hall\'s own 2 test stations falls back to the idle corner, not a rented lab (issue #260)', () => {
+// Issue #260 step 7b item 4: the hex Hub now carries its own 2 fixed test stations (the hall's
+// own 2 test stations had no hex home at all until now) — 4 testing agents all get a real test
+// station, hall or hub, none falling back to the idle corner.
+test('testing fills the hall\'s 2 test stations, then the hub\'s own 2, before any overflow (issue #260 step 7b item 4)', () => {
   const { layout, agent } = setup();
   const seats = Array.from({ length: 4 }, (_, i) => layout.seatFor(agent(`t${i}`, 'testing'), null)!);
+  assert.equal(new Set(seats.map((s) => s.key)).size, 4);
+  assert.ok(seats.some((seat) => seat.key.startsWith('test_')), 'some testers sit at the hall\'s own stations');
+  assert.ok(seats.some((seat) => seat.key.startsWith('hex-hub-test-')), 'some testers sit at the hub\'s own stations');
+});
+
+test('testing overflow past the hall\'s 2 and the hub\'s 2 test stations falls back to the idle corner, not a rented lab (issue #260)', () => {
+  const { layout, agent } = setup();
+  const seats = Array.from({ length: 5 }, (_, i) => layout.seatFor(agent(`t${i}`, 'testing'), null)!);
   assert.ok(seats.some((seat) => seat.key.includes('coffee') || seat.key.includes('sofa') || seat.key.startsWith('hex-hub-idle-')));
 });
 

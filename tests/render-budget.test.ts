@@ -294,7 +294,15 @@ test('the worst case measures the same total every run: the fixture\'s one rando
   // (`['office', 'library', 'lounge' x3, 'desks' x11]`) is gone too — `dropLegacyRoomStorage`
   // would have swept it at construction regardless, so the fixture stopped seeding it. Net
   // measured: -23, landing at 358.
-  assert.deepEqual([...totals], [358], `expected every one of 8 runs to measure 358, got ${[...totals]}`);
+  // Issue #260 step 7b item 4: the hex Hub's own 2 fixed test stations (`HexRooms.ts`'s
+  // `hex-hub-test` zone) add 6 merged draw calls — `TestStation.ts` carries 6 distinct
+  // materials (desk top, desk legs, monitor body/stand, the screen face and the progress-bar
+  // fill, both emissive and so never merged with a toon-material bucket), every one of them
+  // new to this zone. The tool crib's own move out of the rect hall into the Hub's shared
+  // `hex-accents` zone is budget-neutral: it drops the same 2 merged calls (its own counter and
+  // tool materials) from the hall zone that it adds to the Hub's, re-measured, not assumed. Net
+  // measured: +6, landing at 364.
+  assert.deepEqual([...totals], [364], `expected every one of 8 runs to measure 364, got ${[...totals]}`);
 });
 
 test('the merge keeps every visible furniture triangle: merged vertices equal the source vertices', () => {

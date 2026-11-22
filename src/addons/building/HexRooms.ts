@@ -36,6 +36,7 @@ import {
   hexSurfaceHeightAt,
   hexRoomFrame,
   hubFurnitureSpots,
+  hubToolCribSpot,
   pointInPolygon,
   type HexOfficeLayout,
   type HexRoomGeometry,
@@ -48,6 +49,8 @@ import {
 import type { HexPoint } from './HexPlanner.js';
 import { FIGURE_EYE_HEIGHT } from '../../characters/StickFigureParts.js';
 import { createDesk } from '../../furniture/Desk.js';
+import { createTestStation } from '../../furniture/TestStation.js';
+import { createToolCrib } from '../../furniture/ToolCrib.js';
 import { hexOfficeFrame, HEX_OFFICE_DESK } from './hexDeskGeometry.js';
 import { QUEUE_COUNT_SIGN } from './rooms.js';
 
@@ -288,6 +291,9 @@ export interface BuiltHexOffice {
    * `BuildingLayout.ts` to register once, same as the hex Library's own stations. */
   hubDeskSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
   hubIdleSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
+  /** Issue #260 step 7b item 4: the Hub's own fixed test stations — the rect hall's two test
+   * stations (`Office.ts`'s `test_0`/`test_1`) had no hex home at all until now. */
+  hubTestSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
   /** `#room=hub` / `#room=hex-office` (issue #242 review). Unknown names return null, the
    * same contract `BuildingLayout.roomView` already keeps for a rect room. */
   roomView(name: string): { bounds: THREE.Box3; standing: { position: THREE.Vector3; lookAt: THREE.Vector3 }; kind?: string } | null;
@@ -362,6 +368,14 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
   kitchen.position.set((layout.hub.center.x + hubSide.x) / 2, 0, (layout.hub.center.z + hubSide.z) / 2);
   kitchen.lookAt(layout.hub.center.x, 0, layout.hub.center.z);
   accents.add(kitchen);
+  // Issue #260 step 7b item 4: the tool crib moves out of the rect hall (`Office.ts`, its only
+  // home until now) into real hub furniture — same zone as the elevator/kitchen, so it still
+  // costs only its own material count, not a whole new draw-call bucket of its own.
+  const toolCrib = createToolCrib();
+  const cribSpot = hubToolCribSpot(layout.hub);
+  toolCrib.position.set(cribSpot.x, 0, cribSpot.z);
+  toolCrib.lookAt(layout.hub.center.x, 0, layout.hub.center.z);
+  accents.add(toolCrib);
   group.add(accents);
 
   // Issue #260 (step 7a part a): the Hub's own fixed open-office capacity — spare desks for a
@@ -395,6 +409,27 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     position: new THREE.Vector3(spot.position.x, 0, spot.position.z),
     lookAt: new THREE.Vector3(spot.lookAt.x, 1.0, spot.lookAt.z),
   }));
+
+  // Issue #260 step 7b item 4: the Hub's own fixed test stations, the same "one real piece of
+  // furniture per spot" treatment the spare desks above get, own zone so it costs its own
+  // material count regardless of how many stations exist (2 today, fixed, same as the Hub
+  // never growing past its own spare-desk count).
+  const hubTests = new THREE.Group();
+  hubTests.name = 'hex-hub-test';
+  markStatic(hubTests, { zone: 'hex-hub-test', castShadow: false });
+  const hubTestSpots: Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }> = [];
+  for (const spot of hubFurniture.testing) {
+    const testStation = createTestStation();
+    testStation.position.set(spot.position.x, 0, spot.position.z);
+    testStation.lookAt(spot.lookAt.x, 0, spot.lookAt.z);
+    hubTests.add(testStation);
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(testStation.quaternion);
+    hubTestSpots.push({
+      position: testStation.position.clone().addScaledVector(forward, 0.9),
+      lookAt: testStation.position.clone().addScaledVector(forward, -0.15).setY(1.4),
+    });
+  }
+  group.add(hubTests);
 
   // Issue #258 review (the floor-library plugin's NPC/shelves went dark the moment the rect
   // library room they keyed off, `room-N-library`, was deleted): an invisible, zero-geometry
@@ -445,6 +480,7 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
     surfaceHeightAt: (x: number, z: number) => hexSurfaceHeightAt(layout, x, z),
     hubDeskSpots,
     hubIdleSpots,
+    hubTestSpots,
     roomView: (name: string) => {
       const query = name.trim().toLowerCase();
       if (query === 'hub') return hexRoomView(layout.hub);

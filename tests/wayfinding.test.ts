@@ -176,11 +176,11 @@ test('real size, default isometric view at 1600x1000: every room label plate is 
   scene.updateMatrixWorld();
   const labels = labelsIn(scene);
   // Issue #260 steps 2+3: library + 9 mission rooms. The rect office (and its "Your office"
-  // label, `addRoom`) is gone; neither the Hub nor the hex Office that replaced it carries a
-  // room label of its own (only the hex Library and every war room do — a real wayfinding gap,
-  // flagged to Gabriel, not invented here). The retired 'desks'/'lab'/'lounge' overflow kinds
-  // used to add up to 14 more labels here.
-  assert.equal(labels.length, 10);
+  // label, `addRoom`) is gone. Issue #260 step 7b item 4: the hex Office and the Hub each get
+  // their own label now ("Your office", "Hub") — the wayfinding gap the steps 2+3 comment above
+  // used to flag, closed. The retired 'desks'/'lab'/'lounge' overflow kinds used to add up to
+  // 14 more labels here.
+  assert.equal(labels.length, 12);
   const rects = labels.map((label) => ({ text: label.userData.roomLabel as string, rect: screenRect(label, camera) }));
   console.log(`room label plates: min ${Math.min(...rects.map((r) => r.rect.height)).toFixed(1)} px at zoom ${zoomDistance.toFixed(1)}`);
   for (const { text, rect } of rects) assert.ok(rect.height >= 22, `${text}: ${rect.height.toFixed(1)} px at zoom ${zoomDistance.toFixed(1)}`);
@@ -303,10 +303,10 @@ test('every room of the building, and every war room, gets a label', () => {
   layout.syncWorldRooms([missionRoom('One'), missionRoom('Two')]);
   const texts = labelsIn(scene).map((label) => label.userData.roomLabel);
   // Issue #260 steps 2+3: the rect office (`addRoom('office')`) used to be the only thing that
-  // ever labeled "Your office" — gone now, and nothing in `HexRooms.ts` replaces it for the hex
-  // Office or Hub (only the Library and mission rooms get a `roomLabel`). Flagged to Gabriel as
-  // a real wayfinding gap, not invented here: see the step 7b progress issue.
-  assert.deepEqual(texts.sort(), ['Library', 'One', 'Two'].sort());
+  // ever labeled "Your office" — gone now. Issue #260 step 7b item 4: `BuildingLayout`'s own
+  // `addHexOfficeAndHubLabels` replaces it, plus a new "Hub" plate for the room that never had
+  // one at all.
+  assert.deepEqual(texts.sort(), ['Hub', 'Library', 'One', 'Two', 'Your office'].sort());
 });
 
 test('a war room label follows the mission title', () => {

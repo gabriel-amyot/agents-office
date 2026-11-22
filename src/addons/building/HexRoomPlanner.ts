@@ -625,7 +625,7 @@ const HUB_OVERFLOW_MAX_RADIUS = HUB_RADIUS - 1.5;
  * call — never call this twice with the same `index`. */
 export function hubOverflowIdleSpot(hub: HexRoomGeometry, index: number): { point: HexPoint; nextIndex: number } {
   const fixed = hubFurnitureSpots(hub);
-  const avoid = [...fixed.desks, ...fixed.idle].map((spot) => spot.position);
+  const avoid = [...fixed.desks, ...fixed.idle, ...fixed.testing].map((spot) => spot.position);
   return overflowSpiralPoint(hub.center, index, HUB_OVERFLOW_PACKING, HUB_OVERFLOW_MAX_RADIUS, avoid);
 }
 
@@ -671,9 +671,12 @@ export function officeOverflowQueueSpot(office: HexRoomGeometry, index: number):
  * placements leave free (`+1` and `+4` from the Hub's first open edge, offset from `+2`/`+3` the
  * same half-way-to-corner distance); idle spots ring the kitchen/play corner itself (`+2`), the
  * "kitchen and play area where idle agents relax" round 7 asked for — no extra furniture mesh,
- * just somewhere to stand near it.
+ * just somewhere to stand near it. Issue #260 step 7b item 4: the last two corners (`+0` and
+ * `+5`, the only ones the desks/kitchen/elevator above leave free) each get one fixed testing
+ * spot — the hex Hub's own replacement for the rect hall's two test stations, which otherwise
+ * had no hex home at all.
  */
-export function hubFurnitureSpots(hub: HexRoomGeometry): { desks: HubFurnitureSpot[]; idle: HubFurnitureSpot[] } {
+export function hubFurnitureSpots(hub: HexRoomGeometry): { desks: HubFurnitureSpot[]; idle: HubFurnitureSpot[]; testing: HubFurnitureSpot[] } {
   const center = hub.center;
   const desks: HubFurnitureSpot[] = [];
   for (const cornerOffset of [1, 4]) {
@@ -692,5 +695,25 @@ export function hubFurnitureSpots(hub: HexRoomGeometry): { desks: HubFurnitureSp
     position: { x: kitchen.x + along.x * spread + (center.x - kitchen.x) * 0.25, z: kitchen.z + along.z * spread + (center.z - kitchen.z) * 0.25 },
     lookAt: center,
   }));
-  return { desks, idle };
+  const testing: HubFurnitureSpot[] = [0, 5].map((cornerOffset) => {
+    const anchor = hubCornerAnchor(hub, cornerOffset);
+    return { position: anchor, lookAt: center };
+  });
+  return { desks, idle, testing };
+}
+
+/**
+ * Where the tool crib stands in the Hub (issue #260 step 7b item 4: it moves out of the rect
+ * hall, its only home until now, into real hub furniture). Every one of the Hub's 6 corners is
+ * already spoken for (`hubFurnitureSpots`'s own desks/kitchen/elevator/testing), so the crib
+ * instead sits against the wall BETWEEN the two testing spots (`+0`/`+5`) — a tool counter
+ * between the two stations that use it, on the one wall segment no corner anchor already
+ * claims. Halfway between the Hub's own center and that wall's midpoint, the same "halfway in"
+ * distance `hubCornerAnchor` already uses for a corner, so it reads as part of the same ring of
+ * furniture rather than crowding the room's own center.
+ */
+export function hubToolCribSpot(hub: HexRoomGeometry): HexPoint {
+  const edgeIndex = (hub.openEdges[0]! + 5) % 6;
+  const mid = edgeMidpoint(hub.center, hub.radius, edgeIndex);
+  return { x: (hub.center.x + mid.x) / 2, z: (hub.center.z + mid.z) / 2 };
 }
