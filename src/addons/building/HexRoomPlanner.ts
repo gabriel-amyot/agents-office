@@ -274,15 +274,21 @@ export interface HexConnection {
 /**
  * The Hub's own short walkway out to the rect building (issue #260, step 7a part b: "one short
  * walkway or open passage from the hall to the hub" — the two structures used to sit 360 units
- * apart with no route between them at all). The same 3-piece shape every room-to-room
- * `HexConnection` already uses (up, flat, down), just with the rect hall's own north wall
- * standing in for a second hex room: `hubRamp` climbs from the Hub's own open edge to
- * `WALKWAY_HEIGHT`, `deck` runs flat, `hallRamp` comes back down to the hall's own floor height
- * right at its door.
+ * apart with no route between them at all). The same up/flat/down shape every room-to-room
+ * `HexConnection` already uses, just with the rect hall's own north wall standing in for a
+ * second hex room: `hubRamp` climbs from the Hub's own open edge to `WALKWAY_HEIGHT`, `deck`
+ * runs flat (issue #261 review finding: a straight single segment here used to cut straight
+ * through the hall's own solid south wall whenever the Hub sits diagonally offset from the
+ * door, like it does today — `deck` is a polyline instead, bent to stay outside the hall's own
+ * footprint the whole way), `hallRamp` comes back down to the hall's own floor height right at
+ * its door.
  */
 export interface HallConnector {
   hubRamp: HexWalkway;
-  deck: HexWalkway;
+  /** Every point of the flat walkway, in order, all at `WALKWAY_HEIGHT`: `deck[0]` is
+   * `hubRamp.to`, `deck[deck.length - 1]` is `hallRamp.from`. At least 2 points; more than 2
+   * when the straight line between them would cross the hall's own footprint. */
+  deck: HexPoint[];
   hallRamp: HexWalkway;
 }
 
@@ -325,22 +331,39 @@ function rampToward(center: HexPoint, radius: number, toward: HexPoint): { openE
 }
 
 /**
- * The Hub's own walkway out to the rect hall (issue #260, step 7a part b). `rampToward` already
- * finds the nearest edge and the first `RAMP_LENGTH` stretch of the climb; this just continues
- * flat from there, at `WALKWAY_HEIGHT`, to a point `RAMP_LENGTH` short of the hall's own door,
- * then comes back down to the hall's own floor height right at it — the same up/flat/down shape
- * a plain `HexConnection` already has, with the hall's door standing in for a second room's own
- * edge midpoint.
+ * The Hub's own walkway out to the rect hall (issue #260, step 7a part b; re-routed by the
+ * issue #261 review). `rampToward` already finds the nearest edge and the first `RAMP_LENGTH`
+ * stretch of the climb. Today's `HEX_OFFSET` sits the Hub diagonally offset from the hall
+ * (south-west of it), while the door itself (`HALL_CONNECTOR_DOOR`) sits on the hall's own
+ * north wall — a single straight deck between those two points necessarily cuts across the
+ * hall's own footprint (the review's own finding: through its solid south wall). This instead
+ * bends the deck around the hall, staying outside its bounding box the whole way:
+ *
+ * 1. `hubRamp.to` (already clear of the hall in both axes — the Hub itself sits outside it).
+ * 2. Across to `clearX`, a margin outside whichever side of the hall the Hub sits on (its own
+ *    `z` unchanged, so this leg never enters the hall's own `z` range either).
+ * 3. Up (or down) `clearX` to `clearZ`, a margin beyond the door's own wall, still outside the
+ *    hall's `x` range — clear the whole way.
+ * 4. Across, still at `clearZ`, to the door's own `x` — still outside the hall's `z` range.
+ * 5. `hallRamp`: the final `RAMP_LENGTH` descent straight into the door.
+ *
+ * Every leg but the last stays strictly outside the hall's rectangle on at least one axis, by
+ * construction — not just for today's particular `HEX_OFFSET`.
  */
 function hallConnectorFor(hub: HexRoomGeometry): HallConnector {
   const { openEdge, ramp: hubRamp } = rampToward(hub.center, hub.radius, HALL_CONNECTOR_DOOR);
   hub.openEdges.push(openEdge);
-  const down = normalize(sub(HALL_CONNECTOR_DOOR, hubRamp.to));
-  const deckEnd = add(HALL_CONNECTOR_DOOR, scale(down, -RAMP_LENGTH));
+  const clearX = hub.center.x <= HALL.minX ? HALL.minX - RAMP_LENGTH
+    : hub.center.x >= HALL.maxX ? HALL.maxX + RAMP_LENGTH
+    : hubRamp.to.x;
+  const clearZ = HALL.minZ - RAMP_LENGTH;
+  const bend1: HexPoint = { x: clearX, z: hubRamp.to.z };
+  const bend2: HexPoint = { x: clearX, z: clearZ };
+  const bend3: HexPoint = { x: HALL_CONNECTOR_DOOR.x, z: clearZ };
   return {
     hubRamp,
-    deck: { from: hubRamp.to, to: deckEnd },
-    hallRamp: { from: deckEnd, to: HALL_CONNECTOR_DOOR },
+    deck: [hubRamp.to, bend1, bend2, bend3],
+    hallRamp: { from: bend3, to: HALL_CONNECTOR_DOOR },
   };
 }
 
@@ -454,8 +477,12 @@ export function hexSurfaceHeightAt(layout: HexOfficeLayout, x: number, z: number
   const { hubRamp, deck, hallRamp } = layout.hallConnector;
   const onHubRamp = segmentHeightAt(point, hubRamp.from, hubRamp.to, WALKWAY_WIDTH, 0, WALKWAY_HEIGHT);
   if (onHubRamp !== null) return onHubRamp;
-  const onHallDeck = segmentHeightAt(point, deck.from, deck.to, WALKWAY_WIDTH, WALKWAY_HEIGHT, WALKWAY_HEIGHT);
-  if (onHallDeck !== null) return onHallDeck;
+  // Issue #261 review: `deck` is a polyline now (it bends around the hall's own footprint
+  // instead of cutting straight through it) — every consecutive pair is its own flat segment.
+  for (let i = 0; i < deck.length - 1; i++) {
+    const onHallDeck = segmentHeightAt(point, deck[i], deck[i + 1], WALKWAY_WIDTH, WALKWAY_HEIGHT, WALKWAY_HEIGHT);
+    if (onHallDeck !== null) return onHallDeck;
+  }
   const onHallRamp = segmentHeightAt(point, hallRamp.from, hallRamp.to, WALKWAY_WIDTH, WALKWAY_HEIGHT, 0);
   if (onHallRamp !== null) return onHallRamp;
   return null;
@@ -478,6 +505,59 @@ export interface HubFurnitureSpot {
   position: HexPoint;
   /** Faces this point (the Hub's own center, so a desk or idle spot always looks inward). */
   lookAt: HexPoint;
+}
+
+/** The angle between successive points of a sunflower/phyllotaxis spiral — the standard
+ * constant that keeps the spiral's own points roughly evenly spaced at every radius, so no
+ * two indices ever drift close together the way a round-number angle step eventually would. */
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+/**
+ * Review-261 (finding 1): past `hubFurnitureSpots`'/the hex Library's own FIXED station count,
+ * `BuildingLayout.claimOfType('idle' | 'researching')` used to hand out the same already-
+ * occupied spot to every later agent — real stacking, not a cosmetic bug. This is the
+ * replacement: a deterministic, collision-free spot for any index, grown outward from `center`
+ * one at a time, never reused. A golden-angle spiral (`radius = packing * sqrt(index + 1)`,
+ * `angle = index * GOLDEN_ANGLE`) is the standard way to pack an unbounded number of points with
+ * no two ever closer than roughly `packing` apart, by construction — no index ever needs to
+ * collide-check against any other.
+ *
+ * Capped at `maxRadius` (a wall clearance short of the room's own drawn radius, so every spot
+ * stays inside the room's own floor and wall-collision footprint); past that cap (a generous
+ * margin past any real headcount — see call sites) the spiral wraps to a fresh lap at a shifted
+ * starting angle, so even an unrealistic flood of agents never lands two of them on the exact
+ * same point, just a tighter and tighter pack within the same floor.
+ */
+function overflowSpiralPoint(center: HexPoint, index: number, packing: number, maxRadius: number): HexPoint {
+  const perLap = Math.max(1, Math.floor((maxRadius / packing) ** 2));
+  const lap = Math.floor(index / perLap);
+  const i = index % perLap;
+  const radius = Math.min(maxRadius, packing * Math.sqrt(i + 1));
+  const angle = i * GOLDEN_ANGLE + lap * (GOLDEN_ANGLE / 2);
+  return { x: center.x + radius * Math.cos(angle), z: center.z + radius * Math.sin(angle) };
+}
+
+/** A clearance short of `HUB_RADIUS` so an overflow idle spot never stands inside the Hub's
+ * own wall. `0.85` packing: close enough together to read as a crowd, far enough that two
+ * stick figures never visually overlap (`tests/`'s own personal-space margin elsewhere). */
+const HUB_OVERFLOW_PACKING = 0.85;
+const HUB_OVERFLOW_MAX_RADIUS = HUB_RADIUS - 1.5;
+
+/** The `index`-th overflow idle spot (issue #261): past the Hub's own fixed desks and idle
+ * corner, every further idle/overflow agent gets one of these instead of sharing a spot. */
+export function hubOverflowIdleSpot(hub: HexRoomGeometry, index: number): HexPoint {
+  return overflowSpiralPoint(hub.center, index, HUB_OVERFLOW_PACKING, HUB_OVERFLOW_MAX_RADIUS);
+}
+
+const LIBRARY_OVERFLOW_PACKING = 0.85;
+const LIBRARY_OVERFLOW_MAX_RADIUS = ROOM_RADIUS - 1.5;
+
+/** The `index`-th overflow research spot (issue #261 review): past the hex Library's own two
+ * shelves and the hall's own two, a librarian researching still gets its own spot in the
+ * Library itself — never the old rect library room (review-261 finding 2: that path must never
+ * build again). */
+export function libraryOverflowResearchingSpot(library: HexRoomGeometry, index: number): HexPoint {
+  return overflowSpiralPoint(library.center, index, LIBRARY_OVERFLOW_PACKING, LIBRARY_OVERFLOW_MAX_RADIUS);
 }
 
 /**

@@ -262,7 +262,11 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
   // nothing extra (the budget rule in issue #217: new hex geometry pays for itself).
   const { hubRamp, deck: hallDeck, hallRamp } = layout.hallConnector;
   walkway.add(orientedBox(v3(hubRamp.from, 0), v3(hubRamp.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
-  walkway.add(orientedBox(v3(hallDeck.from, WALKWAY_HEIGHT), v3(hallDeck.to, WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
+  // Issue #261 review: `deck` bends around the hall's own footprint (it is a polyline, not one
+  // straight segment) — one box per leg, still the same shared zone (no added draw call).
+  for (let i = 0; i < hallDeck.length - 1; i++) {
+    walkway.add(orientedBox(v3(hallDeck[i], WALKWAY_HEIGHT), v3(hallDeck[i + 1], WALKWAY_HEIGHT), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
+  }
   walkway.add(orientedBox(v3(hallRamp.from, WALKWAY_HEIGHT), v3(hallRamp.to, 0), WALKWAY_DECK_THICKNESS, WALKWAY_WIDTH, walkwayMaterial));
   group.add(walkway);
 

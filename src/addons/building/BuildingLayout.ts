@@ -22,7 +22,7 @@ import type { PickTarget } from '../../scene/Selection.js';
 import { FIGURE_EYE_HEIGHT } from '../../characters/StickFigureParts.js';
 import { createMissionsBoard, placeMissionsBoard, type MissionBoardEntry } from './missionsBoard.js';
 import { buildHexOffice, hexRoomView, type BuiltHexOffice } from './HexRooms.js';
-import { pointInPolygon, type ComponentRole, type HexWorldCounts } from './HexRoomPlanner.js';
+import { hubOverflowIdleSpot, libraryOverflowResearchingSpot, pointInPolygon, type ComponentRole, type HexWorldCounts } from './HexRoomPlanner.js';
 import { componentForRepo } from './componentWing.js';
 
 /**
@@ -52,9 +52,16 @@ const TRIP_STATION: Partial<Record<Activity, string>> = {
   testing: 'testing',
   idle: 'idle',
 };
-const ROOM_FOR_STATION: Record<string, RoomKind> = Object.fromEntries(
-  Object.entries(ROOM_STATION_TYPE).map(([kind, type]) => [type, kind as RoomKind]),
-) as Record<string, RoomKind>;
+/**
+ * Review-261 (finding 2): deriving this from every `ROOM_STATION_TYPE` entry automatically
+ * included `researching -> library` — reachable from `claimOfType`, which rented the old
+ * rectangular library room the moment the hex Library's own stations and the hall's own
+ * shelves ran out, despite `rooms.ts`'s own comment calling that path "unreachable in
+ * practice." It was not. Only `office` (the user's own room, plus an overflow waiting room past
+ * ~20 queued agents) still rents; `researching` overflow now grows more hex-Library spots
+ * instead (`allocateOverflowResearchingStation`) — the rect library must never build again.
+ */
+const ROOM_FOR_STATION: Partial<Record<string, RoomKind>> = { [ROOM_STATION_TYPE.office]: 'office' };
 
 /**
  * The Librarian persona badge (issue #128, Prospero's own review on the issue): the real
@@ -195,6 +202,12 @@ export class BuildingLayout implements LayoutStrategy {
    * rebuild (see `addHexLibraryStations`'s own comment) rather than leaking a fresh one into
    * `RoomLabelBatch` each time. */
   private hexLibraryLabel: THREE.Object3D | undefined;
+  /** Issue #261 review (finding 1): how many overflow idle/research spots have been handed out
+   * so far — `claimOfType` grows these one at a time (`hubOverflowIdleSpot`/
+   * `libraryOverflowResearchingSpot`), never reusing an already-occupied fixed station. Counts
+   * only ever grow, so an index (and so its spot) is never reassigned once an agent holds it. */
+  private overflowIdleCount = 0;
+  private overflowResearchingCount = 0;
 
   constructor(private scene: THREE.Scene, private stations: Map<string, Station>, options: BuildingOptions = {}) {
     this.now = options.now ?? (() => performance.now());
@@ -241,11 +254,25 @@ export class BuildingLayout implements LayoutStrategy {
    */
   private addHexHubStations(): void {
     this.hexOffice.hubDeskSpots.forEach((spot, i) => {
-      this.stations.set(`hex-hub-desk-${i}`, station('implementing', spot.position, spot.lookAt));
+      this.setStationPreservingOccupancy(`hex-hub-desk-${i}`, station('implementing', spot.position, spot.lookAt));
     });
     this.hexOffice.hubIdleSpots.forEach((spot, i) => {
-      this.stations.set(`hex-hub-idle-${i}`, station('idle', spot.position, spot.lookAt));
+      this.setStationPreservingOccupancy(`hex-hub-idle-${i}`, station('idle', spot.position, spot.lookAt));
     });
+  }
+
+  /**
+   * Issue #261 review (finding 3): `rebuildHexOffice` reruns `addHexHubStations`/
+   * `addHexLibraryStations` from scratch on every wing growth. Setting a brand-new `Station`
+   * object at an already-known key reset `occupied` to false every time — an agent still
+   * standing there kept its seat visually, but the key itself looked free again, so a second
+   * agent arriving right after a wing grew could be handed that exact same key (two agents, one
+   * station). Carrying the previous `occupied` flag forward, the same way `updateCounts`'s own
+   * war-room rebuild already does for its stations, closes that window.
+   */
+  private setStationPreservingOccupancy(key: string, next: Station): void {
+    const existing = this.stations.get(key);
+    this.stations.set(key, existing ? { ...next, occupied: existing.occupied } : next);
   }
 
   /**
@@ -262,7 +289,7 @@ export class BuildingLayout implements LayoutStrategy {
     const offsets: Array<[number, number]> = [[-2, -2], [2, 2]];
     for (const [i, [dx, dz]] of offsets.entries()) {
       const position = new THREE.Vector3(center.x + dx, 0, center.z + dz);
-      this.stations.set(`hex-library-${i}`, station('researching', position, lookAt));
+      this.setStationPreservingOccupancy(`hex-library-${i}`, station('researching', position, lookAt));
     }
     // Issue #258: the rect library room (and its own label, built by `buildRoom`) is gone;
     // this is the hex Library's own replacement, same text ("Library", `roomTitle`'s own
@@ -822,14 +849,41 @@ export class BuildingLayout implements LayoutStrategy {
       this.addRoom(rentable);
       return this.claimOfType(type);
     }
-    // Issue #260: no more rented 'desks'/'lab'/'lounge' rooms — the hex Hub's own fixed
-    // capacity (spare desks, the kitchen/play corner) is the only overflow past the hall's own
-    // stations, and the Hub never grows (round 7: "simplicity and beauty"). Past even that,
-    // every remaining kind of overflow shares the Hub's idle corner, the same
-    // graceful-degradation path `claim()` already uses when a pod runs out of its own 6 spots;
-    // idle itself is the terminal case, so it never recurses back into this branch.
+    // Issue #260/#261 review: no more rented 'desks'/'lab'/'lounge'/'library' rooms — the hex
+    // Hub's own fixed capacity (spare desks, the kitchen/play corner) and the hex Library's own
+    // two shelves are the first line of overflow past the hall's own stations, and neither ever
+    // grows a new rented room (round 7: "simplicity and beauty"). Review-261 finding 1: past
+    // THAT fixed capacity, this used to hand the same already-occupied station to every later
+    // agent — real stacking. Every further agent instead gets its own fresh spot, grown on
+    // demand from a deterministic, collision-free spiral (never reused, never shared):
+    // research keeps growing inside the Library itself (finding 2: never the rect room),
+    // everything else piles into the Hub's own idle corner, the same terminal case as before.
+    if (type === 'researching') return this.claim([this.allocateOverflowResearchingStation()], type);
     if (type !== 'idle') return this.claimOfType('idle');
-    return this.keysOfType('idle')[0]!;
+    return this.claim([this.allocateOverflowIdleStation()], 'idle');
+  }
+
+  /** Issue #261 review (finding 1): the `index`-th overflow idle spot, past the Hub's own fixed
+   * desks and idle corner — a fresh station every call, never an existing one. */
+  private allocateOverflowIdleStation(): string {
+    const index = this.overflowIdleCount++;
+    const key = `hex-hub-idle-overflow-${index}`;
+    const hub = this.hexOffice.layout.hub;
+    const spot = hubOverflowIdleSpot(hub, index);
+    this.stations.set(key, station('idle', new THREE.Vector3(spot.x, 0, spot.z), new THREE.Vector3(hub.center.x, 1.0, hub.center.z)));
+    return key;
+  }
+
+  /** Issue #261 review (finding 2): the `index`-th overflow research spot, inside the hex
+   * Library itself — never the old rect library room `addRoom('library')` used to rent. */
+  private allocateOverflowResearchingStation(): string {
+    const index = this.overflowResearchingCount++;
+    const key = `hex-library-overflow-${index}`;
+    const library = this.hexOffice.layout.library;
+    const office = this.hexOffice.layout.office;
+    const spot = libraryOverflowResearchingSpot(library, index);
+    this.stations.set(key, station('researching', new THREE.Vector3(spot.x, 0, spot.z), new THREE.Vector3(office.center.x, 0, office.center.z)));
+    return key;
   }
 
   private claim(keys: string[], type: string): string {

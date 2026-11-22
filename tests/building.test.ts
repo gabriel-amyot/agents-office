@@ -1301,3 +1301,78 @@ test('the missions board exists from the start, empty, and updates as missions a
   // Still mounted: a closed mission does not remove the board or itself from it
   assert.ok(scene.getObjectByName('missions-board'));
 });
+
+// --- Issue #261 review: overflow must never stack two agents on one station ---
+
+test('60 agents each land on a unique station: idle overflow never hands out an already-occupied spot (review-261 finding 1)', () => {
+  const { layout, agent } = setup();
+  const positions = new Set<string>();
+  for (let i = 0; i < 60; i++) {
+    const seat = layout.seatFor(agent(`agent-${i}`, 'implementing'), null)!;
+    const key = `${seat.position.x.toFixed(2)},${seat.position.z.toFixed(2)}`;
+    assert.ok(!positions.has(key), `agent ${i} landed on an already-claimed position ${key} (${seat.key})`);
+    positions.add(key);
+  }
+  assert.equal(positions.size, 60, 'every one of 60 agents gets its own seat, none stacked');
+});
+
+test('overflow idle stations beyond the Hub\'s fixed capacity are new, distinct stations, not the same key reused', () => {
+  const { layout, agent } = setup();
+  const keys = new Set<string>();
+  // The hall (8) and the Hub (4) together carry 12 fixed idle stations; well past that.
+  for (let i = 0; i < 20; i++) keys.add(layout.seatFor(agent(`idle-${i}`, 'idle'), null)!.key);
+  assert.equal(keys.size, 20, 'every idle agent claims a distinct station key');
+});
+
+test('research overflow never rents the old rectangular library room again (review-261 finding 2)', () => {
+  const { layout, agent, scene } = setup();
+  // 2 hex-library shelves + 2 hall shelves = 4 fixed researching stations; push well past that.
+  for (let i = 0; i < 12; i++) {
+    layout.seatFor(agent(`librarian-${i}`, 'researching', { badges: ['librarian'] }), null);
+  }
+  for (const record of scene.children) {
+    assert.doesNotMatch(record.name ?? '', /-library$/, `a rect library room was built: ${record.name}`);
+  }
+  assert.equal(scene.getObjectByName('room-1-library'), undefined, 'the rect library room must never build');
+  assert.deepEqual(layout.roomKinds, ['office'], 'library is never a rented roomKind again');
+});
+
+test('research overflow past the fixed shelves still lands every librarian on its own spot, inside the Library', () => {
+  const { layout, agent } = setup();
+  const keys = new Set<string>();
+  // The first 4 (2 hex-library shelves + 2 hall shelves) claim the fixed stations; every
+  // one past that must still be a unique, real spot — and once those 4 are gone, the
+  // Library's own overflow spiral, never a rented room.
+  for (let i = 0; i < 12; i++) {
+    const seat = layout.seatFor(agent(`librarian-${i}`, 'researching', { badges: ['librarian'] }), null)!;
+    if (i >= 4) assert.match(seat.key, /^hex-library-/, 'overflow still lands inside the Library, never a rented room');
+    keys.add(seat.key);
+  }
+  assert.equal(keys.size, 12, 'every librarian gets its own distinct spot, none stacked');
+});
+
+// --- Issue #261 review finding 3: a wing rebuild must never un-occupy a still-held station ---
+
+test('a station still held by an agent stays occupied across a wing rebuild (review-261 finding 3)', () => {
+  const { layout, agent } = setup();
+  // The hall's own 8 idle stations (coffee/sofa) come before the hex Hub's own 4
+  // (`hex-hub-idle-*`) in claim order; fill them first so the next idle agent is
+  // forced onto a hub station, the one kind `addHexHubStations` re-registers on
+  // every wing rebuild.
+  for (let i = 0; i < 8; i++) layout.seatFor(agent(`filler-${i}`, 'idle'), null);
+  const idleAgent = layout.seatFor(agent('idle-holder', 'idle'), null)!;
+  assert.match(idleAgent.key, /^hex-hub-idle-/, 'test setup: the holder must land on a hub idle station');
+
+  // Growing a new mission wing tears down and rebuilds the hex Hub/Library group
+  // (`rebuildHexOffice`), which used to re-register every hub/library station from
+  // scratch and silently reset `occupied` to false on every one of them.
+  layout.syncWorldRooms([{
+    id: 'm-1', kind: 'mission', title: 'Mission 1', state: 'open',
+    walls: { statement: 'x', docs: [], issues: [], kanban: [] },
+  }]);
+
+  // A second agent asking for the same idle station type must never be handed the
+  // key `idle-holder` is still standing at.
+  const secondIdle = layout.seatFor(agent('idle-holder-2', 'idle'), null)!;
+  assert.notEqual(secondIdle.key, idleAgent.key, 'the first idle agent\'s station must still read occupied after the rebuild');
+});

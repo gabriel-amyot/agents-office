@@ -7,6 +7,7 @@ import {
   pointInPolygon,
   WALKWAY_HEIGHT,
 } from '../src/addons/building/HexRoomPlanner.js';
+import { HALL } from '../src/addons/building/RoomPlanner.js';
 
 test('buildHexOfficeLayout is deterministic', () => {
   const a = buildHexOfficeLayout();
@@ -98,6 +99,24 @@ test('wallColliders: no wall blocks either ramp\'s own doorway point', () => {
     for (const wall of colliders) {
       const inside = point.x > wall.minX && point.x < wall.maxX && point.z > wall.minZ && point.z < wall.maxZ;
       assert.ok(!inside, `a wall blocks the doorway at ${JSON.stringify(point)}`);
+    }
+  }
+});
+
+// --- Issue #261 review: the Hub's own walkway out to the rect hall must never cut through it ---
+
+test('the hall connector\'s walkway never crosses the rect hall\'s own footprint (review-261)', () => {
+  const layout = buildHexOfficeLayout();
+  const { hubRamp, deck, hallRamp } = layout.hallConnector;
+  const insideHall = (p: { x: number; z: number }) =>
+    p.x > HALL.minX && p.x < HALL.maxX && p.z > HALL.minZ && p.z < HALL.maxZ;
+  const points = [hubRamp.to, ...deck, hallRamp.to];
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    for (let t = 0; t <= 1; t += 0.01) {
+      const sample = { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t };
+      assert.ok(!insideHall(sample), `leg ${i} of the hall connector passes through the hall's own footprint at ${JSON.stringify(sample)}`);
     }
   }
 });
