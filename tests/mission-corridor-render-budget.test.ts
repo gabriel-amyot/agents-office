@@ -15,7 +15,6 @@ after(() => {
   Reflect.deleteProperty(globalThis, 'document');
 });
 
-const { createOffice } = await import('../src/scene/Office.js');
 const { addLighting } = await import('../src/scene/SceneSetup.js');
 const { BuildingLayout } = await import('../src/addons/building/BuildingLayout.js');
 const { MAX_TOMBSTONES } = await import('../src/addons/building/missionRooms.js');
@@ -88,7 +87,11 @@ function worldRoom(index: number) {
 function buildPopulatedScene(roomCount: number): { scene: THREE.Scene; manager: InstanceType<typeof AgentManager> } {
   const scene = new THREE.Scene();
   addLighting(scene);
-  const layout = new BuildingLayout(scene, createOffice(scene), {
+  // Issue #260 step 7b item 6: `createOffice` (the rect hall) never ran in production for the
+  // 'building' layout (`main.ts`'s own `layoutId === 'activity' ? createOffice(scene) : new
+  // Map()`, step 4) — an empty `Map` matches it; `BuildingLayout`'s own constructor builds the
+  // hex structure regardless.
+  const layout = new BuildingLayout(scene, new Map(), {
     storage: { getItem: () => null, setItem: () => undefined },
   });
   layout.syncWorldRooms(Array.from({ length: roomCount }, (_, i) => worldRoom(i)));

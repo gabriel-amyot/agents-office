@@ -2,16 +2,17 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   buildHexOfficeLayout,
+  cribStandSpots,
+  CRIB_STAND_COUNT,
   hexSurfaceHeightAt,
   hexWallColliders,
   hubFurnitureSpots,
   hubOverflowIdleSpot,
+  hubToolCribSpot,
   libraryOverflowResearchingSpot,
   pointInPolygon,
   WALKWAY_HEIGHT,
 } from '../src/addons/building/HexRoomPlanner.js';
-import { HALL } from '../src/addons/building/RoomPlanner.js';
-
 test('buildHexOfficeLayout is deterministic', () => {
   const a = buildHexOfficeLayout();
   const b = buildHexOfficeLayout();
@@ -86,13 +87,14 @@ test('a full walk from the hub floor, up its ramp, across the deck, down the off
   }
 });
 
-test('wallColliders: the library contributes 5 wall segments, the office 4, the hub 4 (issue #260: the hall connector is a second open edge)', () => {
+test('wallColliders: the library contributes 5 wall segments, the office 4, the hub 5 (issue #260 step 7b item 5: the hall connector, and its hub open edge, is gone)', () => {
   const layout = buildHexOfficeLayout();
   const colliders = hexWallColliders(layout);
-  // Issue #258: office (4, two open edges: hub and library) + library (5) = 9. Issue #260
-  // (step 7a part b): the hub now has two open edges too (the office stair and the hall
-  // connector), so it drops from 5 to 4 as well — 9 + 4 = 13.
-  assert.equal(colliders.length, 13);
+  // Issue #258: office (4, two open edges: hub and library) + library (5) = 9. Issue #260 step
+  // 7b item 5: the hub is back to a single open edge (the office stair only, the hall connector
+  // deleted along with the rect hall it bridged to) — 5 wall segments, same as the library —
+  // 9 + 5 = 14.
+  assert.equal(colliders.length, 14);
 });
 
 test('wallColliders: no wall blocks either ramp\'s own doorway point', () => {
@@ -106,23 +108,9 @@ test('wallColliders: no wall blocks either ramp\'s own doorway point', () => {
   }
 });
 
-// --- Issue #261 review: the Hub's own walkway out to the rect hall must never cut through it ---
-
-test('the hall connector\'s walkway never crosses the rect hall\'s own footprint (review-261)', () => {
-  const layout = buildHexOfficeLayout();
-  const { hubRamp, deck, hallRamp } = layout.hallConnector;
-  const insideHall = (p: { x: number; z: number }) =>
-    p.x > HALL.minX && p.x < HALL.maxX && p.z > HALL.minZ && p.z < HALL.maxZ;
-  const points = [hubRamp.to, ...deck, hallRamp.to];
-  for (let i = 0; i < points.length - 1; i++) {
-    const a = points[i];
-    const b = points[i + 1];
-    for (let t = 0; t <= 1; t += 0.01) {
-      const sample = { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t };
-      assert.ok(!insideHall(sample), `leg ${i} of the hall connector passes through the hall's own footprint at ${JSON.stringify(sample)}`);
-    }
-  }
-});
+// Issue #260 step 7b item 5: the Hub's own walkway out to the rect hall (and the test above
+// that proved it never crossed the hall's own footprint, review-261) is gone along with the
+// rect hall itself — there is no rect footprint left to bridge to or stay clear of.
 
 // --- Review-261 round 2: the overflow spiral must also steer clear of fixed furniture ---
 
@@ -168,4 +156,24 @@ test('a Library overflow research spot never lands close enough to double up on 
     seen.add(key);
     cursor = nextIndex;
   }
+});
+
+test('cribStandSpots (issue #227): a fixed ring of CRIB_STAND_COUNT points, each the same distance from the crib counter, no two agents sharing a point', () => {
+  const layout = buildHexOfficeLayout();
+  const crib = hubToolCribSpot(layout.hub);
+  const spots = cribStandSpots(layout.hub);
+  assert.equal(spots.length, CRIB_STAND_COUNT);
+  const radii = spots.map((spot) => Math.hypot(spot.x - crib.x, spot.z - crib.z));
+  for (const radius of radii) assert.ok(Math.abs(radius - radii[0]) < 1e-9, 'every stand spot sits the same distance from the crib');
+  const seen = new Set<string>();
+  for (const spot of spots) {
+    const key = `${spot.x.toFixed(6)},${spot.z.toFixed(6)}`;
+    assert.ok(!seen.has(key), `duplicate crib stand spot: ${key}`);
+    seen.add(key);
+  }
+});
+
+test('cribStandSpots is deterministic', () => {
+  const layout = buildHexOfficeLayout();
+  assert.deepEqual(cribStandSpots(layout.hub), cribStandSpots(layout.hub));
 });

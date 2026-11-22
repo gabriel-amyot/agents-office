@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { createOffice } from '../src/scene/Office.js';
 import { addLighting } from '../src/scene/SceneSetup.js';
 import { BuildingLayout } from '../src/addons/building/BuildingLayout.js';
 import { MAX_TOMBSTONES } from '../src/addons/building/missionRooms.js';
@@ -12,34 +11,18 @@ import { overviewBounds } from '../src/scene/OverviewCamera.js';
 import { IsometricController } from '../src/scene/IsometricCamera.js';
 
 /**
- * A seeded PRNG (mulberry32), so the fixture's one source of randomness
- * (`src/furniture/Bookshelf.ts`'s book count and color, the only `Math.random`
- * call in `src` or `plugins`) draws the same sequence every run. The draw-call
- * budget test measures this fixture; an unseeded `Math.random` there made the
- * worst-case total drift between runs (issue #128 review).
- */
-function seededRandom(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/**
- * Gabriel's real size: the hall, the hex Hub/Office/Library, 9 mission rooms (one locked)
+ * Gabriel's real size: the hex Hub/Office/Library, 9 mission rooms (one locked)
  * and 40 agents. Half of the agents wear BMAD hats (one to four) and a quarter
  * wear GitHub cards (one to five), as with the fork plugins on.
  *
- * `buildingRooms` is documentation only, not read by this fixture (issue #260, step 7a): before
+ * `buildingRooms` is documentation only, not read by this fixture. Issue #260 (step 7a): before
  * the rented 'desks'/'lab'/'lounge' kinds retired, 40 agents' own overflow used to rent up to
- * 16 extra rect rooms; now that overflow absorbs into the hex Hub's own fixed desks and
- * kitchen/play corner instead, the rect building itself never grows past its one office room.
+ * 16 extra rect rooms; that overflow absorbs into the hex Hub's own fixed desks and
+ * kitchen/play corner instead. Issue #260 steps 2+3: the rect building's own office room
+ * (the last rect room `addRoom` ever built) is gone too, replaced by the hex Office —
+ * the rect building now never rents a room, full stop.
  */
-export const REAL_SIZE = { buildingRooms: 1, missionRooms: 9, agents: 40, hatWearers: 20, cardHolders: 10 } as const;
+export const REAL_SIZE = { buildingRooms: 0, missionRooms: 9, agents: 40, hatWearers: 20, cardHolders: 10 } as const;
 
 // 'librarian' included (issue #128 review): the budget fixture must wear every hat it pins.
 const PERSONAS = ['dev', 'architect', 'qa', 'pm', 'analyst', 'sm', 'debugger', 'spec-coach', 'data-engineer', 'ux-designer', 'tech-writer', 'librarian'];
@@ -123,21 +106,15 @@ function lastEquipSourceFor(i: number): 'skill' | 'tool' | undefined {
 export function buildRealSizeOffice(): { scene: THREE.Scene; manager: AgentManager; layout: BuildingLayout; github: GithubOfficeExtension } {
   const scene = new THREE.Scene();
   addLighting(scene);
-  // Per-workspace desk rooms are retired (#138): the 11 workspaces share the desk pool, the room count stays the same with plain `desks` rooms.
-  const rooms = ['office', 'library', 'lounge', 'lounge', 'lounge', ...Array.from({ length: 11 }, () => 'desks')];
-  const store = new Map([['agents-office.building.rooms', JSON.stringify(rooms)]]);
-  // Seeded for the room build only (the library's bookshelves): deterministic book
-  // count and color, so the draw-call budget test measures the same scene every time.
-  const realRandom = Math.random;
-  Math.random = seededRandom(163);
-  let layout: BuildingLayout;
-  try {
-    layout = new BuildingLayout(scene, createOffice(scene), {
-      storage: { getItem: (key: string) => store.get(key) ?? null, setItem: () => undefined },
-    });
-  } finally {
-    Math.random = realRandom;
-  }
+  // Issue #260 step 7b item 6: `createOffice` (the rect hall) is gone from this fixture — it
+  // never ran in production for the 'building' layout to begin with (`main.ts`'s own
+  // `layoutId === 'activity' ? createOffice(scene) : new Map()`), and `BuildingLayout`'s own
+  // constructor (`rebuildHexOffice`) builds its own hex Hub/Office/Library stations into a
+  // plain, empty `Map` without reading anything `createOffice` would have seeded. The rect
+  // hall's own bookshelf (`Bookshelf.ts`'s `Math.random`) was the one source of nondeterminism
+  // this fixture used to seed; the hex library carries no bookshelf of its own, so there is
+  // nothing left here to seed.
+  const layout = new BuildingLayout(scene, new Map());
   // Worst case: every war room at the tombstone cap, not just a handful.
   layout.syncWorldRooms(Array.from({ length: REAL_SIZE.missionRooms }, (_, i) => ({
     id: `m${i}`, kind: 'mission', title: `Mission ${i}`, state: i === 8 ? 'locked' as const : 'open' as const,

@@ -16,7 +16,6 @@ import { createBarStool, createFridge, createKitchenCounter } from '../furniture
 import { createFoosballTable } from '../furniture/FoosballTable.js';
 import { createAirHockeyTable } from '../furniture/AirHockeyTable.js';
 import { createArcadeCabinet } from '../furniture/ArcadeCabinet.js';
-import { createToolCrib } from '../furniture/ToolCrib.js';
 import { markStatic } from './StaticMerge.js';
 
 /** Scene name of the hall walls group. */
@@ -122,11 +121,9 @@ export function createOffice(scene: THREE.Scene): Map<string, Station> {
   airHockey.position.set(2.5, 0, -1);
   hall.add(airHockey);
 
-  // --- Tool crib (issue #167 addendum) — center-right, a small counter between the play zone and the review desks ---
-  const toolCrib = createToolCrib();
-  toolCrib.position.set(6, 0, 1);
-  hall.add(toolCrib);
-
+  // Issue #260 step 7b item 4: the tool crib (issue #167 addendum) moved out of the rect hall
+  // into the hex Hub (`HexRooms.ts`'s own accent furniture) — real furniture now, not a
+  // placeholder, so it only needs the one home.
   const arcadeCabinet = createArcadeCabinet();
   arcadeCabinet.position.set(0, 0, -3.2);
   arcadeCabinet.rotation.y = Math.PI;

@@ -105,6 +105,15 @@ export interface LayoutStrategy {
    * holds its last known height there rather than snapping to 0.
    */
   surfaceHeightAt?(x: number, z: number): number | null;
+  /**
+   * The tool crib's own standing spots (issue #227: hub furniture since #260 step 7b item 4) —
+   * a small fixed ring, not a spiral: the crib itself never grows, so a handful of spots is
+   * enough for several agents to visit at once without visually overlapping. Empty (not null)
+   * for a layout with no crib (the flat activity layout) — the one caller (`plugins/skills`'s
+   * equipment extension) falls back to equipping at once, the same graceful degradation every
+   * other optional method here follows.
+   */
+  toolCribSpots?(): Array<{ position: THREE.Vector3; lookAt: THREE.Vector3 }>;
 }
 
 /** A wall's 2D floor footprint, world space (issue #194). The same shape `FreeCamera`'s own `WallRect` and `BuildingLayout`'s `wallRects` use; kept here too so a layout can implement `wallColliders` without importing an addon module. */

@@ -20,7 +20,16 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => new Proxy({}, {
 })) as never;
 const { DeskMonitorsExtension, drawMiniBoard, monitorWorldCorners } = await import('../src/addons/building/deskMonitors.js');
 const { countDrawCalls } = await import('../src/scene/RenderBudget.js');
-const { deskCameraPose, deskTalkSpotPose, queueSpotWorldPositions, rayBlockedByQuad } = await import('../src/addons/building/deskGeometry.js');
+const {
+  hexDeskCameraPose: deskCameraPose,
+  hexDeskTalkSpotPose: deskTalkSpotPose,
+  hexQueueSpotWorldPositions: queueSpotWorldPositions,
+  rayBlockedByQuad,
+} = await import('../src/addons/building/hexDeskGeometry.js');
+const { FIGURE_EYE_HEIGHT } = await import('../src/characters/StickFigureParts.js');
+/** Queue spots are a figure's own root (floor level, `y = 0`); the sightline/frustum checks
+ * below want the visible part of a standing figure, so they check eye height above each spot. */
+const eyeLevel = (spot: THREE.Vector3): THREE.Vector3 => spot.clone().setY(spot.y + FIGURE_EYE_HEIGHT);
 after(() => {
   dom.window.close();
   Reflect.deleteProperty(globalThis, 'document');
@@ -29,7 +38,7 @@ after(() => {
 function officeScene(): THREE.Scene {
   const scene = new THREE.Scene();
   const office = new THREE.Group();
-  office.name = 'room-0-office';
+  office.name = 'hex-office-desk';
   scene.add(office);
   return scene;
 }
@@ -147,7 +156,7 @@ test('monitorWorldCorners returns one quad of 4 points per monitor, left then ri
 test('from the desk camera pose, a ray to every queue spot clears both monitors', () => {
   const { position: camera } = deskCameraPose();
   const monitors = monitorWorldCorners();
-  const blocked = queueSpotWorldPositions().filter((spot) => monitors.some((quad) => rayBlockedByQuad(camera, spot, quad)));
+  const blocked = queueSpotWorldPositions().map(eyeLevel).filter((spot) => monitors.some((quad) => rayBlockedByQuad(camera, spot, quad)));
   assert.deepEqual(blocked, [], `${blocked.length} queue spot(s) have a monitor in the way`);
 });
 
@@ -188,8 +197,11 @@ test('both monitor faces sit inside the desk camera\'s own view frustum, at ever
   for (const aspect of DESK_VIEW_ASPECTS) {
     const frustum = deskFrustum(aspect);
     for (const [side, quad] of (['left', 'right'] as const).map((s, i) => [s, monitorWorldCorners()[i]!] as const)) {
-      const box = new THREE.Box3().setFromPoints(quad);
-      assert.ok(frustum.intersectsBox(box), `the ${side} monitor is outside the desk camera's own frustum at aspect ${aspect.toFixed(3)}`);
+      // Review: `intersectsBox` is true the moment any part of the monitor overlaps the
+      // frustum — a monitor three-quarters cut off at the frame's own edge still "intersects".
+      // Every corner containsPoint is the real "fully in frame" check.
+      const outsideCorners = quad.filter((corner) => !frustum.containsPoint(corner));
+      assert.deepEqual(outsideCorners, [], `the ${side} monitor has ${outsideCorners.length} corner(s) outside the desk camera's own frustum at aspect ${aspect.toFixed(3)}`);
     }
   }
 });
@@ -200,7 +212,7 @@ test('both monitor faces sit inside the desk camera\'s own view frustum, at ever
 // before this fix, the nearest row's outer pair (`a = ±4.6`, filled at 6 waiting) failed every
 // one of these counts and every aspect, exactly the bug report.
 test('every queue spot clears the desk camera\'s frustum for 1, 6, 14 and 23 waiting agents, at every supported aspect ratio', () => {
-  const spots = queueSpotWorldPositions();
+  const spots = queueSpotWorldPositions().map(eyeLevel);
   for (const aspect of DESK_VIEW_ASPECTS) {
     const frustum = deskFrustum(aspect);
     for (const waiting of [1, 6, 14, 23]) {

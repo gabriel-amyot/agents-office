@@ -16,15 +16,15 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => new Proxy({}, {
 const { createOffice } = await import('../src/scene/Office.js');
 const { BuildingLayout } = await import('../src/addons/building/BuildingLayout.js');
 const {
-  buildRoom, buildCeiling, roomFloorColor, roomTitle, roomLabelLines, compactLabelLines, middleEllipsis, roomLabelPose, roomLabelBatchFor, WALL_HEIGHT, FIRST_PERSON_LABEL_Y, FIRST_PERSON_LABEL_HEIGHT,
-  OVERVIEW_DOOR_HEIGHT, ISOMETRIC_LABEL_BOTTOM, CEILING_ZONE_NAME,
+  buildWalls, buildCeiling, doorFrame, roomLabel, roomLabelLines, compactLabelLines, middleEllipsis, roomLabelPose, roomLabelBatchFor, WALL_HEIGHT, FIRST_PERSON_LABEL_Y, FIRST_PERSON_LABEL_HEIGHT,
+  ISOMETRIC_LABEL_BOTTOM, CEILING_ZONE_NAME,
 } = await import('../src/addons/building/rooms.js');
 const { buildRealSizeOffice } = await import('./real-size-office.js');
 const { IsometricController } = await import('../src/scene/IsometricCamera.js');
 const { overviewBounds } = await import('../src/scene/OverviewCamera.js');
 const { buildMissionRoom, testHexWarRoom } = await import('../src/addons/building/missionRooms.js');
 const { applyCutaway, applyCeilingCut, OVERVIEW_WALL_HEIGHT } = await import('../src/scene/Cutaway.js');
-const { StaticBatch, STATIC_SOURCE_LAYER } = await import('../src/scene/StaticMerge.js');
+const { StaticBatch } = await import('../src/scene/StaticMerge.js');
 const { FrameLoop } = await import('../src/scene/FrameLoop.js');
 const { addLighting } = await import('../src/scene/SceneSetup.js');
 const { OFFICE } = await import('../src/utils/Constants.js');
@@ -41,7 +41,12 @@ const center = (rect: Rect) => ({ x: (rect.minX + rect.maxX) / 2, z: (rect.minZ 
 function building() {
   const scene = new THREE.Scene();
   const storage = new Map<string, string>();
-  const layout = new BuildingLayout(scene, createOffice(scene), {
+  // Issue #260 step 7b item 6: `createOffice` (the rect hall) never ran in production for the
+  // 'building' layout (`main.ts`'s own `layoutId === 'activity' ? createOffice(scene) : new
+  // Map()`, step 4) — an empty `Map` matches it; `BuildingLayout`'s own constructor builds the
+  // hex structure regardless. The 'activity' layout's own `createOffice` behavior is still
+  // exercised directly below ("the activity layout scene does not change in the overview").
+  const layout = new BuildingLayout(scene, new Map(), {
     now: () => 0,
     storage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => void storage.set(k, v) },
   });
@@ -52,11 +57,6 @@ function building() {
 const labelsIn = (root: THREE.Object3D) => {
   const found: THREE.Object3D[] = [];
   root.traverse((object) => { if (object.userData.roomLabel !== undefined) found.push(object); });
-  return found;
-};
-const framesIn = (root: THREE.Object3D) => {
-  const found: THREE.Object3D[] = [];
-  root.traverse((object) => { if (object.name === 'door-frame') found.push(object); });
   return found;
 };
 
@@ -70,10 +70,11 @@ const missionRoom = (title = 'Office roadmap', sleeperCount = 3) => ({
 
 test('each room has one label above its center; in first person a small plate high in the room, below the wall top', () => {
   const slot = slotFor(1);
-  const room = buildRoom('library', slot, 1, []);
-  const labels = labelsIn(room.group);
+  // Issue #260 steps 2+3: `buildRoom` (the rect room builder) is gone; `roomLabel` is the one
+  // piece of it this test actually needs, direct from `roomLabels.ts` (re-exported by `rooms.ts`).
+  const label = roomLabel('Library', new THREE.Vector3(center(slot.rect).x, 0, center(slot.rect).z), slot.rect);
+  const labels = labelsIn(label);
   assert.equal(labels.length, 1);
-  const [label] = labels;
   assert.equal(label.name, 'room-label', 'a handle in the world: its scale is the plate size, so it scales with distance');
   assert.equal(label.userData.roomLabel, 'Library');
   assert.ok(Math.abs(label.position.x - center(slot.rect).x) < 1e-6 && Math.abs(label.position.z - center(slot.rect).z) < 1e-6);
@@ -179,10 +180,12 @@ test('real size, default isometric view at 1600x1000: every room label plate is 
   controller.refresh();
   scene.updateMatrixWorld();
   const labels = labelsIn(scene);
-  // Issue #260 (step 7a): office + library + 9 mission rooms. The Hub and hex Office carry no
-  // room label of their own (only the rect office, the hex Library and every war room do); the
-  // retired 'desks'/'lab'/'lounge' overflow kinds used to add up to 14 more labels here.
-  assert.equal(labels.length, 11);
+  // Issue #260 steps 2+3: library + 9 mission rooms. The rect office (and its "Your office"
+  // label, `addRoom`) is gone. Issue #260 step 7b item 4: the hex Office and the Hub each get
+  // their own label now ("Your office", "Hub") — the wayfinding gap the steps 2+3 comment above
+  // used to flag, closed. The retired 'desks'/'lab'/'lounge' overflow kinds used to add up to
+  // 14 more labels here.
+  assert.equal(labels.length, 12);
   const rects = labels.map((label) => ({ text: label.userData.roomLabel as string, rect: screenRect(label, camera) }));
   console.log(`room label plates: min ${Math.min(...rects.map((r) => r.rect.height)).toFixed(1)} px at zoom ${zoomDistance.toFixed(1)}`);
   for (const { text, rect } of rects) assert.ok(rect.height >= 22, `${text}: ${rect.height.toFixed(1)} px at zoom ${zoomDistance.toFixed(1)}`);
@@ -296,17 +299,19 @@ test('the sign list is collected once, and again after sceneChanged', () => {
   assert.equal(labelsIn(late.group)[0].userData.onTop, true, 'the new room label gets the overview pose');
 });
 
-test('rooms no longer carry the small door sign chip', () => {
-  const room = buildRoom('library', slotFor(2), 2, []);
-  const chips = room.group.children.filter((child) => child instanceof CSS2DObject && (child as CSS2DObject).element.classList.contains('room-sign'));
-  assert.equal(chips.length, 0);
-});
+// Issue #260 steps 2+3: BuildingLayout no longer builds a rect room (`buildRoom`, the only
+// thing that ever added a "small door sign chip", is gone). Nothing replaces it, so there is
+// no room construction left to assert a missing chip on.
 
 test('every room of the building, and every war room, gets a label', () => {
   const { scene, layout } = building();
   layout.syncWorldRooms([missionRoom('One'), missionRoom('Two')]);
   const texts = labelsIn(scene).map((label) => label.userData.roomLabel);
-  assert.deepEqual(texts.sort(), ['Library', 'One', 'Two', 'Your office'].sort());
+  // Issue #260 steps 2+3: the rect office (`addRoom('office')`) used to be the only thing that
+  // ever labeled "Your office" — gone now. Issue #260 step 7b item 4: `BuildingLayout`'s own
+  // `addHexOfficeAndHubLabels` replaces it, plus a new "Hub" plate for the room that never had
+  // one at all.
+  assert.deepEqual(texts.sort(), ['Hub', 'Library', 'One', 'Two', 'Your office'].sort());
 });
 
 test('a war room label follows the mission title', () => {
@@ -324,9 +329,8 @@ test('a room label hides in first person while the camera is inside its room, so
 test('the label controller applies the room label rule from the camera position', () => {
   const scene = new THREE.Scene();
   const slot = slotFor(1);
-  const room = buildRoom('library', slot, 1, []);
-  scene.add(room.group);
-  const [label] = labelsIn(room.group);
+  const label = roomLabel('Library', new THREE.Vector3(center(slot.rect).x, 0, center(slot.rect).z), slot.rect);
+  scene.add(label);
   assert.deepEqual(label.userData.roomRect, slot.rect);
   const camera = new THREE.PerspectiveCamera(60, 16 / 10, 0.1, 500);
   const inside = center(slot.rect);
@@ -349,13 +353,9 @@ test('the label controller applies the room label rule from the camera position'
   assert.equal(label.visible, true, 'always in the overview');
 });
 
-// Issue #260 (step 7a): 'lounge' and 'desks' are retired room kinds — idle and implementing
-// overflow both go to the hex Hub's own fixed spots instead of a numbered rented room.
-test('a later office is still numbered a waiting room', () => {
-  assert.equal(roomTitle('office', []), 'Your office');
-  assert.equal(roomTitle('office', ['office']), 'Waiting room 2');
-  assert.equal(roomTitle('library', ['office']), 'Library');
-});
+// Issue #260 steps 2+3: `roomTitle` (and the numbered-waiting-room behavior it gave) is gone
+// along with `addRoom` — the hex office never rents a second one, so there is no later office
+// left to number.
 
 // --- AC2: door frames ---
 
@@ -382,35 +382,19 @@ function assertFrameAt(frame: THREE.Object3D, rect: Rect, door: Door, color: num
 
 test('a room door has a frame of two posts and a lintel in the room floor color', () => {
   const slot = slotFor(0);
-  const room = buildRoom('office', slot, 0, []);
-  const frames = framesIn(room.group);
-  assert.equal(frames.length, 1);
-  assertFrameAt(frames[0], slot.rect, slot.door, roomFloorColor('office'));
+  // Issue #260 steps 2+3: `buildRoom`/`roomFloorColor` (the rect room builder and its own
+  // floor-tint lookup) are gone; `doorFrame` is the one piece of it this test actually needs,
+  // direct from `rooms.ts` — any color works, `doorFrame` only ever paints the frame with it.
+  const officeFloorColor = 0x8a6f5a;
+  const frame = doorFrame(slot.rect, slot.door, officeFloorColor);
+  assertFrameAt(frame, slot.rect, slot.door, officeFloorColor);
 });
 
-test('every doorway of the building has a frame, outer rings and war rooms included', () => {
-  const { scene, layout, agent } = building();
-  // Fill the first ring and open an outer room (8 rooms). Issue #260: idle overflow no longer
-  // rents a 'lounge' room at all (the hex Hub's own kitchen/play corner absorbs it instead) —
-  // the only room kind that still grows past ring 0 is 'office' itself, once its own queue
-  // (~23 spots per room) fills past 7 rooms' worth of waiting agents.
-  for (let i = 0; i < 200; i++) {
-    layout.seatFor({ id: `q${i}`, activity: 'meeting', extras: { attention: 'waiting', waitMinutes: i } }, null);
-  }
-  layout.syncWorldRooms([missionRoom('A'), missionRoom('B'), missionRoom('C')]);
-  const roomCount = layout.roomKinds.length;
-  assert.ok(roomCount >= 8, `an outer ring exists (${roomCount} rooms)`);
-  const frames = framesIn(scene);
-  // Issue #259: a war room is a hex room now, with no door frame at all (round 7: "rooms
-  // without doors" — its only entrance is its own stair). The "+3" below used to count one
-  // frame per mission room; dropped, since none of them build one any more.
-  assert.equal(frames.length, roomCount, 'one frame per rect room door, none for the hex war rooms');
-  for (let index = 0; index < roomCount; index++) {
-    const slot = slotFor(index);
-    const room = scene.getObjectByName(`room-${index}-${layout.roomKinds[index]}`)!;
-    assertFrameAt(framesIn(room)[0], slot.rect, slot.door, roomFloorColor(layout.roomKinds[index]));
-  }
-});
+// Issue #260 steps 2+3: the rect office never rents a second room past its own fixed queue
+// capacity any more (`addRoom` is gone; overflow grows an office-interior spiral spot instead,
+// `BuildingLayout.allocateOverflowQueueStation` — no new door, no new frame). A hex war room
+// never had a door frame either way (round 7: "rooms without doors"). There is no "every
+// doorway, outer rings included" case left for this suite to exercise.
 
 // --- AC3: cut-away walls ---
 
@@ -435,24 +419,16 @@ function drawnWallTops(scene: THREE.Scene, zone: 'walls' | 'doors' = 'walls'): n
   return tops;
 }
 
-/** Every source wall and door frame mesh of the building: none may draw itself (they draw merged). */
-function sourceWalls(scene: THREE.Scene): THREE.Mesh[] {
-  const found: THREE.Mesh[] = [];
-  scene.traverse((object) => {
-    if (object.name !== 'room-walls' && object.name !== 'building-hall-walls' && object.name !== 'door-frame') return;
-    object.traverse((child) => { if ((child as THREE.Mesh).isMesh && child.visible && child.name !== 'static-merged') found.push(child as THREE.Mesh); });
-  });
-  return found;
-}
-
 const topOf = (mesh: THREE.Object3D) => new THREE.Box3().setFromObject(mesh).max.y;
 
 test('issue #176: a room\'s walls (office, library, every other kind) are as tall as the main room\'s', () => {
   assert.equal(WALL_HEIGHT, OFFICE.height, 'room walls share the main room\'s wall height constant');
   const slot = slotFor(1);
-  const room = buildRoom('library', slot, 1, []);
+  // Issue #260 steps 2+3: `buildRoom` is gone; `buildWalls` (still exported, the library scene
+  // uses it too) is the one piece of it this test actually needs.
+  const wallsGroup = buildWalls(slot.rect, [slot.door]);
   const walls: THREE.Mesh[] = [];
-  room.group.traverse((object) => { if (object.name === 'room-walls') object.traverse((child) => { if ((child as THREE.Mesh).isMesh) walls.push(child as THREE.Mesh); }); });
+  wallsGroup.traverse((object) => { if ((object as THREE.Mesh).isMesh) walls.push(object as THREE.Mesh); });
   assert.ok(walls.length > 0, 'the room has wall meshes');
   for (const wall of walls) assert.ok(Math.abs(topOf(wall) - OFFICE.height) < 1e-6, `${wall.parent?.name ?? 'wall'} top at ${topOf(wall)}, expected ${OFFICE.height}`);
 });
@@ -468,9 +444,9 @@ test('buildCeiling() makes a ceiling mesh at the given height, merged into the s
 
 test('every room\'s ceiling merges into one mesh, and toggling that merged mesh triggers no rebuild and ejects nothing (review, #184 round 2)', () => {
   const scene = new THREE.Scene();
-  const library = buildRoom('library', slotFor(1), 1, []);
-  const office2 = buildRoom('office', slotFor(2), 2, []);
-  scene.add(library.group, office2.group);
+  // Issue #260 steps 2+3: `buildRoom` is gone; two bare `buildCeiling` meshes are all this
+  // merge test actually needs (it already marks itself into `CEILING_ZONE`).
+  scene.add(buildCeiling(slotFor(1).rect), buildCeiling(slotFor(2).rect));
 
   const statics = new StaticBatch(scene);
   statics.update();
@@ -489,18 +465,15 @@ test('every room\'s ceiling merges into one mesh, and toggling that merged mesh 
   assert.equal(statics.update(), false, 'showing it again triggers no batch rebuild either');
 });
 
-test('room walls, door frames and hall walls draw merged in zones the overview lowers', () => {
-  const { scene, layout } = building();
-  layout.syncWorldRooms([missionRoom('A')]);
+// Issue #260 steps 2+3: `sourceWalls` only ever scanned the rect hall's and rect rooms' own
+// wall/door-frame names (`room-walls`, `building-hall-walls`, `door-frame`) — all gone now,
+// along with `addRoom`/`rebuildHallWalls`/`hideHallSideWalls`. Every wall left (the hex Hub,
+// Office, Library and every war room) merges through `HexRooms.ts`'s own `hex-walls` zone,
+// already covered by `tests/hex-rooms.test.ts`'s "hex walls carry an overview cutaway height".
+test('the hex structure\'s own walls draw merged, from a cutaway zone the overview lowers', () => {
+  const { scene } = building();
   const statics = new StaticBatch(scene);
   frameOf(scene, statics, false);
-  const sources = sourceWalls(scene);
-  // Issue #259: a mission war room is a hex room now — its own walls live in `HexRooms.ts`'s
-  // `hex-walls` zone, which `sourceWalls` (named `room-walls`/`building-hall-walls`/
-  // `door-frame` only) never scans. The bound here used to include the mission corridor's and
-  // this room's own rect wall pieces; now it only counts the hall and the base rect rooms.
-  assert.ok(sources.length > 10, `${sources.length} wall meshes`);
-  for (const mesh of sources) assert.ok(mesh.layers.isEnabled(STATIC_SOURCE_LAYER) && !mesh.layers.isEnabled(0), `${mesh.name} draws merged`);
   const tops = drawnWallTops(scene);
   assert.ok(tops.length > 0, 'the walls draw from cutaway zones');
   assert.ok(Math.max(...tops) >= WALL_HEIGHT - 1e-6, 'first person keeps full walls');
@@ -572,37 +545,16 @@ test('the render loop applies the cutaway in the frame of the mode switch and re
   for (const top of drawnWallTops(scene)) assert.ok(top <= OVERVIEW_WALL_HEIGHT + 1e-6, `wall top ${top}`);
 });
 
-test('the hall wall pieces the overview hides draw merged in one group that the overview hides', () => {
-  const { scene } = building();
-  const statics = new StaticBatch(scene);
-  frameOf(scene, statics, false);
-  const hall = scene.getObjectByName('building-hall-walls')!;
-  const hidden = hall.getObjectByName('overview-hidden-walls')!;
-  assert.ok(hidden, 'a group of hidden pieces');
-  assert.equal(hidden.userData.hiddenFromAbove, true);
-  const pieces = hidden.children.filter((child) => (child as THREE.Mesh).isMesh && child.name !== 'static-merged');
-  assert.ok(pieces.length >= 2, `${pieces.length} hidden pieces`);
-  for (const piece of pieces) assert.ok(piece.layers.isEnabled(STATIC_SOURCE_LAYER), 'a hidden piece draws merged');
-  const merged = hidden.children.filter((child) => child.name === 'static-merged');
-  assert.equal(merged.length, 1, 'one draw call for all hidden pieces');
-  hidden.visible = false;
-  const camera = new THREE.Layers();
-  let drawn = 0;
-  hall.traverseVisible((object) => { if ((object as THREE.Mesh).isMesh && object.layers.test(camera) && hidden.getObjectById(object.id)) drawn++; });
-  assert.equal(drawn, 0, 'hidden with its group in the overview');
-});
-
-test('in the overview door frames drop to 1.2 m, above the 0.5 m walls, so a doorway reads from above', () => {
-  const { scene } = building();
-  const statics = new StaticBatch(scene);
-  frameOf(scene, statics, false);
-  const full = drawnWallTops(scene, 'doors');
-  assert.ok(full.length > 0 && Math.max(...full) > 2, 'full height frames in first person');
-  frameOf(scene, statics, true);
-  const doors = drawnWallTops(scene, 'doors');
-  assert.ok(Math.abs(Math.max(...doors) - OVERVIEW_DOOR_HEIGHT) < 1e-6, `door top ${Math.max(...doors)}`);
-  for (const top of drawnWallTops(scene)) assert.ok(top <= OVERVIEW_WALL_HEIGHT + 1e-6);
-});
+// Issue #260 steps 2+3: `buildWalls`'s own `hideSides` parameter (the piece that fed
+// `overview-hidden-walls`) had exactly one caller — `rebuildHallWalls`, the rect hall's own
+// south/west sides — now gone along with it; nothing in production passes `hideSides` any
+// more. `static-merge.test.ts`'s own "a root without a zone merges in place and follows its own
+// visibility" already covers the generic mechanism `markStatic`'s `hiddenFromAbove` uses.
+//
+// `markDoorCutaway` (the door-frame cutaway zone `static-batch-door-frames`, this suite's own
+// "in the overview door frames drop to 1.2 m" test used) is gone too — a hex war room has no
+// door frame at all (round 7: "rooms without doors"), and the rect rooms that used to have one
+// are gone along with `addRoom`.
 
 test('the render loop redraws the shadows when only the cutaway changes', () => {
   const { scene } = building();
@@ -621,8 +573,11 @@ test('the render loop redraws the shadows when only the cutaway changes', () => 
   loop.frame(0);
   loop.frame(100);
   loop.frame(200);
-  // A zone that stands at full height again (for example built in the overview): only the cutaway changes
-  const zone = scene.children.find((child) => child.name === 'static-batch-hall-walls')!;
+  // A zone that stands at full height again (for example built in the overview): only the
+  // cutaway changes. Issue #260 steps 2+3: the rect hall's own `hall-walls` zone is gone along
+  // with `rebuildHallWalls`; the hex structure's own `hex-walls` zone (nested inside
+  // `hexOffice.group`, not a direct scene child like the rect hall's was) is the one left.
+  const zone = scene.getObjectByName('static-batch-hex-walls')!;
   zone.scale.y = 1;
   zone.updateMatrixWorld(true);
   renderer.shadowMap.needsUpdate = false;
@@ -707,16 +662,18 @@ test('the label controller hides war room signs in the default overview and show
   assert.equal(sleepers.element.style.visibility, 'hidden', 'past sessions wait for a hover');
 });
 
+// Issue #260 steps 2+3: the rect office (and its "You" sign, `furnishing.ts`'s `furnishOffice`)
+// is gone; the hex office's own desk has had the same sign since step 2 (`HexRooms.ts`'s
+// `buildHexOfficeDesk`) — this is now the only "You" sign left, so it is what must still
+// declutter in the overview.
 test('the "You" sign at the user desk is a detail sign too, so it does not cover the queue in the overview', () => {
-  const slot = slotFor(0);
-  const room = buildRoom('office', slot, 0, []);
-  const you = room.group.children.find((child): child is CSS2DObject => child instanceof CSS2DObject && child.element.textContent === 'You')!;
-  assert.deepEqual(you.userData.detailSign, { rect: slot.rect, hoverOnly: false });
-});
-
-test('only the first office is "Your office"; a later one is a numbered waiting room', async () => {
-  const { roomTitle } = await import('../src/addons/building/rooms.js');
-  assert.equal(roomTitle('office', []), 'Your office');
-  assert.equal(roomTitle('office', ['office', 'library']), 'Waiting room 2');
-  assert.equal(roomTitle('office', ['office', 'library', 'office']), 'Waiting room 3');
+  const { layout, scene } = building();
+  const desk = scene.getObjectByName('hex-office-desk')!;
+  const you = desk.children.find((child): child is CSS2DObject => child instanceof CSS2DObject && child.element.textContent === 'You')!;
+  assert.ok(you, 'the hex desk has its own "You" sign');
+  const detail = you.userData.detailSign as { rect: Rect; hoverOnly: boolean };
+  assert.equal(detail.hoverOnly, false);
+  const officeView = layout.roomView('office')!;
+  assert.deepEqual([detail.rect.minX, detail.rect.maxX, detail.rect.minZ, detail.rect.maxZ],
+    [officeView.bounds.min.x, officeView.bounds.max.x, officeView.bounds.min.z, officeView.bounds.max.z]);
 });

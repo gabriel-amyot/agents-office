@@ -3,6 +3,7 @@ import { after, test } from 'node:test';
 import { JSDOM } from 'jsdom';
 import * as THREE from 'three';
 import type { ManagedAgent } from '../src/agents/AgentManager.js';
+import type { LayoutStrategy } from '../src/layout/LayoutStrategy.js';
 
 // Toon materials paint a gradient on a canvas at import time.
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
@@ -32,6 +33,30 @@ function setup() {
   const scene = new THREE.Scene();
   const manager = new AgentManager(scene, new Map());
   return { scene, manager };
+}
+
+/** A fake layout exposing only `toolCribSpots` (issue #227) — every other `LayoutStrategy`
+ * method stays unimplemented, the same graceful-degradation contract the real one follows. */
+function fakeLayoutWithCrib(count: number): LayoutStrategy {
+  const spots = Array.from({ length: count }, (_, i) => ({
+    position: new THREE.Vector3(i, 0, 0),
+    lookAt: new THREE.Vector3(0, 0, 0),
+  }));
+  return {
+    id: 'fake',
+    seatFor: () => null,
+    release: () => {},
+    toolCribSpots: () => spots,
+  };
+}
+
+/** Forces a figure's own in-flight walk to finish: `StickFigure.update` snaps to the target
+ * once the remaining distance is under its own threshold, so one call with a long enough
+ * delta always lands it (see `StickFigure.ts`'s own `update`, `WALK_SPEED * delta` clamped to
+ * the remaining distance). */
+function finishWalk(managed: ManagedAgent): void {
+  managed.figure.update(0, 10);
+  managed.figure.update(0, 10);
 }
 
 test('the extension runs only while the skills server plugin is active', () => {
@@ -177,4 +202,111 @@ test('the client reads extras.tools and extras.lastEquipSource to equip the righ
   const hand = handOn(managed)!;
   assert.ok(hand);
   assert.equal(hand.name, 'terminal-screen', 'Bash, the true newest entry per lastEquipSource, should equip the terminal screen, not git\'s wrench');
+});
+
+// --- Issue #227: the crib trip ---
+
+test('AC1: a new skill load walks the agent to the crib before the item shows in hand', () => {
+  const { manager } = setup();
+  manager.addAgent({ id: 'a', name: 'A', activity: 'idle' });
+  const [managed] = manager.getAgents();
+  const layout = fakeLayoutWithCrib(6);
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  assert.equal(handOn(managed), undefined, 'no skill yet');
+
+  manager.setExtras('a', { skills: ['git'] });
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  assert.equal(handOn(managed), undefined, 'the item must not show until the trip finishes');
+  assert.equal(managed.figure.walking, true, 'the figure walks to the crib first');
+
+  finishWalk(managed);
+  skillsEquipment.update!(0, 0);
+  assert.ok(handOn(managed), 'the item shows once the trip finishes');
+});
+
+test('AC1: with no crib on the layout (or none passed at all), the item equips at once — graceful degradation', () => {
+  const { manager } = setup();
+  manager.addAgent({ id: 'a', name: 'A', activity: 'idle' });
+  const [managed] = manager.getAgents();
+  skillsEquipment.agentsChanged!(manager.getAgents());
+  manager.setExtras('a', { skills: ['git'] });
+  skillsEquipment.agentsChanged!(manager.getAgents());
+  assert.ok(handOn(managed), 'no layout argument at all (every existing caller before #227) still equips immediately');
+});
+
+test('AC2: an agent waiting on Gabriel never leaves its place for a new skill', () => {
+  const { manager } = setup();
+  manager.addAgent({ id: 'a', name: 'A', activity: 'idle' });
+  const [managed] = manager.getAgents();
+  const layout = fakeLayoutWithCrib(6);
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+
+  manager.setExtras('a', { skills: ['git'], attention: 'waiting' });
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  assert.equal(managed.figure.walking, false, 'must not start a trip while waiting on Gabriel');
+  assert.ok(handOn(managed), 'the item still shows, just without the trip');
+});
+
+test('AC2 (review round 1): an aging wait (still queued, not fresh) never leaves its place for a new skill either', () => {
+  const { manager } = setup();
+  manager.addAgent({ id: 'a', name: 'A', activity: 'idle' });
+  const [managed] = manager.getAgents();
+  const layout = fakeLayoutWithCrib(6);
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+
+  // 20 min: past the 15-min fresh band, so `figure.isWaiting` (fresh-only) is already false,
+  // but `queuesForYou` (fresh or aging) still counts this as waiting on Gabriel.
+  manager.setExtras('a', { skills: ['git'], attention: 'waiting', waitMinutes: 20 });
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  assert.equal(managed.figure.walking, false, 'an aging wait must not start a crib trip either');
+  assert.ok(handOn(managed), 'the item still shows, just without the trip');
+});
+
+test('AC3: 5 agents loading a skill at the same instant each claim a distinct crib spot', () => {
+  const { manager } = setup();
+  const layout = fakeLayoutWithCrib(6);
+  for (let i = 0; i < 5; i++) manager.addAgent({ id: `a${i}`, name: `A${i}`, activity: 'idle' });
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  for (let i = 0; i < 5; i++) manager.setExtras(`a${i}`, { skills: ['git'] });
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+
+  const targets = manager.getAgents().map((managed) => `${managed.figure.walking}`);
+  assert.ok(targets.every((walking) => walking === 'true'), 'every one of the 5 is mid-trip');
+  const positions = manager.getAgents().map((managed) => managed.figure.joints.root.position.x);
+  // `fakeLayoutWithCrib` gives each spot a distinct x; a shared crib spot would show as two
+  // agents walking toward the exact same x.
+  assert.equal(new Set(positions.map((x) => x.toFixed(3))).size, 5, 'no two agents walk to the same crib spot');
+});
+
+test('a mid-trip clear (skills emptied before the agent reaches the crib) cancels the trip instead of equipping a stale item', () => {
+  const { manager } = setup();
+  manager.addAgent({ id: 'a', name: 'A', activity: 'idle' });
+  const [managed] = manager.getAgents();
+  const layout = fakeLayoutWithCrib(6);
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  manager.setExtras('a', { skills: ['git'] });
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  assert.equal(handOn(managed), undefined);
+
+  manager.setExtras('a', undefined);
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  finishWalk(managed);
+  skillsEquipment.update!(0, 0);
+  assert.equal(handOn(managed), undefined, 'cleared mid-trip: never equips the item it was walking to get');
+});
+
+test('a mid-trip newer skill replaces the target item instead of equipping the stale one on arrival', () => {
+  const { manager } = setup();
+  manager.addAgent({ id: 'a', name: 'A', activity: 'idle' });
+  const [managed] = manager.getAgents();
+  const layout = fakeLayoutWithCrib(6);
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  manager.setExtras('a', { skills: ['git'] });
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+
+  manager.setExtras('a', { skills: ['git', 'jira'] });
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  finishWalk(managed);
+  skillsEquipment.update!(0, 0);
+  assert.equal(handOn(managed)!.name, 'clipboard', 'jira (the newest skill by the time it arrives) wins, not git');
 });
