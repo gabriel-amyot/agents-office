@@ -3,6 +3,7 @@ import { registerExtension, type OfficeExtension } from '../../src/extensions.js
 import type { ManagedAgent } from '../../src/agents/AgentManager.js';
 import type { LayoutStrategy } from '../../src/layout/LayoutStrategy.js';
 import { handItemFor, faceItemFor, buildHandItem, buildFaceItem, type HandItem, type FaceKind } from './items.js';
+import { queuesForYou } from '../../src/ui/attention.js';
 
 /**
  * Skills plugin, browser part (issue #167, equipment catalog): equips the one true
@@ -170,7 +171,12 @@ export const skillsEquipment: OfficeExtension = {
           }
         }
       } else if (entry.handKey !== handKey) {
-        const skipTrip = isFreshEntry || !hand || managed.figure.isWaiting || cribSpots.length === 0;
+        // Review round 1 (codex): AC2 says "waiting on Gabriel", which is queue membership
+        // (`queuesForYou`: a fresh OR aging wait), not `figure.isWaiting` (`callsForYou`, fresh
+        // only — the raised-hand pose). An aging wait (15 min to 24 h) still sits in the queue
+        // but reads as "not waiting" to `isWaiting`, so it used to get sent on a crib trip while
+        // still owing Gabriel an answer.
+        const skipTrip = isFreshEntry || !hand || queuesForYou(managed.info.extras) || cribSpots.length === 0;
         if (skipTrip) {
           equipHand(entry, hand, handKey);
         } else {

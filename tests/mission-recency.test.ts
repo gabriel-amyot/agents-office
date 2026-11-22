@@ -38,6 +38,13 @@ test('byRecencyNewestFirst: equal recency ties break on id, deterministically in
   assert.deepEqual([b, a].sort(byRecencyNewestFirst), [a, b]);
 });
 
+test('byRecencyNewestFirst: two rooms with no valid timestamp at all still tie-break on id, deterministically in either input order (review round 1: NaN from subtracting two -Infinity sentinels used to skip the id tie-break)', () => {
+  const a = { id: 'a' };
+  const b = { id: 'b' };
+  assert.deepEqual([a, b].sort(byRecencyNewestFirst), [a, b]);
+  assert.deepEqual([b, a].sort(byRecencyNewestFirst), [a, b]);
+});
+
 test('byRecencyNewestFirst: sorting the same list twice gives the same order (AC4)', () => {
   const rooms = [
     { id: 'r1', createdAt: '2026-11-01T00:00:00Z' },

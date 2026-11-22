@@ -20,12 +20,19 @@ export function missionRecencyAt(room: Pick<WorldRoom, 'createdAt' | 'sleepers'>
  * Newest-first order, with a stable tie-break on `id` (issue #225 AC4: the same reload twice
  * must give the same layout — two rooms with equal or absent recency would otherwise sort
  * however `Array.sort`'s own input order happened to be that particular poll).
+ *
+ * Review round 1 (codex): comparing by equality first, not by subtracting, matters because two
+ * rooms that both have no valid timestamp carry the exact same sentinel (`-Infinity`); their
+ * difference is `NaN`, which `!== 0` is true for, so the old subtract-then-check shape returned
+ * `NaN` itself (never reaching the `id` tie-break below) and left those rooms in whatever order
+ * they happened to arrive in — breaking AC4 for a wing with more than one timestamp-less room.
  */
 export function byRecencyNewestFirst(
   a: Pick<WorldRoom, 'id' | 'createdAt' | 'sleepers'>,
   b: Pick<WorldRoom, 'id' | 'createdAt' | 'sleepers'>,
 ): number {
-  const diff = missionRecencyAt(b) - missionRecencyAt(a);
-  if (diff !== 0) return diff;
+  const recencyA = missionRecencyAt(a);
+  const recencyB = missionRecencyAt(b);
+  if (recencyA !== recencyB) return recencyB - recencyA;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }

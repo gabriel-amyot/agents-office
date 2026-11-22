@@ -247,6 +247,21 @@ test('AC2: an agent waiting on Gabriel never leaves its place for a new skill', 
   assert.ok(handOn(managed), 'the item still shows, just without the trip');
 });
 
+test('AC2 (review round 1): an aging wait (still queued, not fresh) never leaves its place for a new skill either', () => {
+  const { manager } = setup();
+  manager.addAgent({ id: 'a', name: 'A', activity: 'idle' });
+  const [managed] = manager.getAgents();
+  const layout = fakeLayoutWithCrib(6);
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+
+  // 20 min: past the 15-min fresh band, so `figure.isWaiting` (fresh-only) is already false,
+  // but `queuesForYou` (fresh or aging) still counts this as waiting on Gabriel.
+  manager.setExtras('a', { skills: ['git'], attention: 'waiting', waitMinutes: 20 });
+  skillsEquipment.agentsChanged!(manager.getAgents(), layout);
+  assert.equal(managed.figure.walking, false, 'an aging wait must not start a crib trip either');
+  assert.ok(handOn(managed), 'the item still shows, just without the trip');
+});
+
 test('AC3: 5 agents loading a skill at the same instant each claim a distinct crib spot', () => {
   const { manager } = setup();
   const layout = fakeLayoutWithCrib(6);
