@@ -550,6 +550,45 @@ test('"all floors" never migrates: it keeps reading the legacy key directly, sam
   assert.deepEqual(layout.roomKinds, ['office']);
 });
 
+// Issue #260 review (the BMAD party's own condition on the 7a split): the migration writes two
+// keys, the copied floor data then the "migrated" marker — a storage write that throws between
+// them (quota exceeded, a blocked write) must never leave corrupt or double-copied state behind,
+// and a later construction must still converge safely. `migrateLegacyRooms` already writes the
+// data key first and the marker second specifically so a failure after the first write is safe
+// to retry (the `!already` guard skips a second copy once the floor key holds anything at all);
+// this proves it, not just documents it.
+test('a storage write that fails between the copied data and the "migrated" marker leaves no corrupt state, and a retry still converges', () => {
+  const MIGRATED_KEY = 'agents-office.building.rooms.migrated';
+  const storage = new Map([[BUILDING_STORAGE_KEY, JSON.stringify(['office', 'library', 'desks'])]]);
+  let failMarkerWrite = true;
+  const flaky = {
+    getItem: (k: string) => storage.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      if (k === MIGRATED_KEY && failMarkerWrite) throw new Error('quota exceeded');
+      storage.set(k, v);
+    },
+  };
+
+  let firstLayout: InstanceType<typeof BuildingLayout> | undefined;
+  assert.doesNotThrow(() => { firstLayout = new BuildingLayout(new THREE.Scene(), createOffice(new THREE.Scene()), { storage: flaky, floor: 'agents-office' }); },
+    'the constructor never throws, even when a storage write fails mid-migration');
+
+  // The data write before the failure point still landed (the copy, then this same
+  // construction's own saveRooms() immediately overwriting it with the real, filtered list —
+  // the same thing the non-flaky migration test above shows); the marker never did.
+  assert.deepEqual(firstLayout!.roomKinds, ['office'], 'the building still works this page load, migration failure or not');
+  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office']);
+  assert.equal(storage.has(MIGRATED_KEY), false, 'the marker never wrote, since the mocked failure point threw before it could');
+
+  failMarkerWrite = false;
+  const retried = new BuildingLayout(new THREE.Scene(), createOffice(new THREE.Scene()), { storage: flaky, floor: 'agents-office' });
+  // The retry must not re-copy the legacy list on top of whatever is already there (the `!already`
+  // guard): the floor key is untouched by the copy step, only read and filtered as usual.
+  assert.deepEqual(retried.roomKinds, ['office'], 'the stale library/desks entries still drop the ordinary way, no double-copy');
+  assert.deepEqual(JSON.parse(storage.get(floorStorageKey('agents-office'))!), ['office']);
+  assert.ok(storage.has(MIGRATED_KEY), 'the marker finally writes once the mocked failure clears');
+});
+
 // --- Issue #126: war-room furniture routes agent activity, in-room first ---
 
 test('AC1/AC2: researching and planning agents go to their own room\'s bookshelf and whiteboard', () => {
