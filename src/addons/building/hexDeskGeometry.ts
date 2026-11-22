@@ -159,6 +159,15 @@ function collidesWithDesk(a: number, d: number): boolean {
   return a <= HEX_OFFICE_DESK.a + 1.5 && d >= HEX_OFFICE_DESK_D - 0.5 && d <= HEX_OFFICE_DESK_D + DESK_SEAT_OFFSET + 0.8;
 }
 
+/**
+ * `frame.point`'s `y` is the figure's own root joint (`StickFigure.teleportTo`: `joints.root.
+ * position.copy(position)`, the same root `BuildingLayout.ts`'s other `station('queue', ...)`
+ * call site plants at `y = 0`), not an eye height — a figure's root sits at its own feet, with
+ * the skeleton built upward from there (`StickFigureParts.ts`). Passing `FIGURE_EYE_HEIGHT` here
+ * (fixed in review: the original pass planted every queued agent's own feet at its own eye
+ * height off the hex Office's floor, floating each one near the top of the walls) would lift the
+ * whole figure by its own eye height instead of just placing it on the floor.
+ */
 export function hexQueueSpotWorldPositions(layout: HexOfficeLayout = buildHexOfficeLayout()): THREE.Vector3[] {
   const frame = hexOfficeFrame(layout);
   const positions: THREE.Vector3[] = [];
@@ -168,7 +177,7 @@ export function hexQueueSpotWorldPositions(layout: HexOfficeLayout = buildHexOff
     const offset = row % 2 === 0 ? 0 : SPOT_PITCH / 2;
     for (let a = -half + offset; a <= half; a += SPOT_PITCH) {
       if (collidesWithDesk(a, d)) continue;
-      positions.push(frame.point(a, d, FIGURE_EYE_HEIGHT));
+      positions.push(frame.point(a, d));
     }
   }
   return positions;
@@ -201,8 +210,12 @@ function measureRequiredFov(layout: HexOfficeLayout): number {
     const frustum = new THREE.Frustum().setFromProjectionMatrix(
       new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
     );
+    // Queue spots are now ground-level (`y = 0`, a figure's own root/feet), not eye height — the
+    // frustum check still wants to confirm the visible part of a standing figure clears the
+    // frame, so it checks eye height here (`spot.y + FIGURE_EYE_HEIGHT`) rather than the root
+    // itself, which the camera's own downward tilt would otherwise clip at the near rows.
     const spots = hexQueueSpotWorldPositions(layout);
-    if (spots.every((spot) => frustum.containsPoint(spot))) return fov;
+    if (spots.every((spot) => frustum.containsPoint(spot.clone().setY(spot.y + FIGURE_EYE_HEIGHT)))) return fov;
   }
   return 120;
 }

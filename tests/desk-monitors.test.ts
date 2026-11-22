@@ -26,6 +26,10 @@ const {
   hexQueueSpotWorldPositions: queueSpotWorldPositions,
   rayBlockedByQuad,
 } = await import('../src/addons/building/hexDeskGeometry.js');
+const { FIGURE_EYE_HEIGHT } = await import('../src/characters/StickFigureParts.js');
+/** Queue spots are a figure's own root (floor level, `y = 0`); the sightline/frustum checks
+ * below want the visible part of a standing figure, so they check eye height above each spot. */
+const eyeLevel = (spot: THREE.Vector3): THREE.Vector3 => spot.clone().setY(spot.y + FIGURE_EYE_HEIGHT);
 after(() => {
   dom.window.close();
   Reflect.deleteProperty(globalThis, 'document');
@@ -152,7 +156,7 @@ test('monitorWorldCorners returns one quad of 4 points per monitor, left then ri
 test('from the desk camera pose, a ray to every queue spot clears both monitors', () => {
   const { position: camera } = deskCameraPose();
   const monitors = monitorWorldCorners();
-  const blocked = queueSpotWorldPositions().filter((spot) => monitors.some((quad) => rayBlockedByQuad(camera, spot, quad)));
+  const blocked = queueSpotWorldPositions().map(eyeLevel).filter((spot) => monitors.some((quad) => rayBlockedByQuad(camera, spot, quad)));
   assert.deepEqual(blocked, [], `${blocked.length} queue spot(s) have a monitor in the way`);
 });
 
@@ -205,7 +209,7 @@ test('both monitor faces sit inside the desk camera\'s own view frustum, at ever
 // before this fix, the nearest row's outer pair (`a = ±4.6`, filled at 6 waiting) failed every
 // one of these counts and every aspect, exactly the bug report.
 test('every queue spot clears the desk camera\'s frustum for 1, 6, 14 and 23 waiting agents, at every supported aspect ratio', () => {
-  const spots = queueSpotWorldPositions();
+  const spots = queueSpotWorldPositions().map(eyeLevel);
   for (const aspect of DESK_VIEW_ASPECTS) {
     const frustum = deskFrustum(aspect);
     for (const waiting of [1, 6, 14, 23]) {

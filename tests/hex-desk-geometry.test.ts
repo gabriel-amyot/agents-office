@@ -26,6 +26,7 @@ const {
 } = await import('../src/addons/building/hexDeskGeometry.js');
 const { buildHexOfficeLayout, ROOM_RADIUS } = await import('../src/addons/building/HexRoomPlanner.js');
 const { pointInPolygon } = await import('../src/addons/building/HexRoomPlanner.js');
+const { FIGURE_EYE_HEIGHT } = await import('../src/characters/StickFigureParts.js');
 
 after(() => {
   dom.window.close();
@@ -60,12 +61,26 @@ test('at least 20 queue spots (issue #260 office-size decision), every one insid
   assert.deepEqual(outside, [], `${outside.length} queue spot(s) fall outside the office floor`);
 });
 
-test('from the hex desk camera pose, a ray to every queue spot clears both monitors', () => {
+test('every queue spot is a figure\'s own root (feet), at the office floor height, not eye height', () => {
+  // `StickFigure.teleportTo` copies this straight into `joints.root.position` — the figure's
+  // own feet, with the skeleton built upward from there (`StickFigureParts.ts`). A spot planted
+  // at `FIGURE_EYE_HEIGHT` instead of floor level (`y = 0`) lifts every queued agent's own feet
+  // up by its own eye height, floating the whole figure near the top of the walls.
+  const spots = hexQueueSpotWorldPositions(layout);
+  const floating = spots.filter((spot) => spot.y !== 0);
+  assert.deepEqual(floating, [], `${floating.length} queue spot(s) sit above floor height`);
+});
+
+test('from the hex desk camera pose, a ray to every queued agent\'s own eye level clears both monitors', () => {
+  // Queue spots are a figure's own root (feet, `y = 0`) now, not its eye point — the sightline
+  // that matters for "can the camera see past the monitor to this person" is to the visible
+  // part of a standing figure, so this checks eye height above each spot, the same height
+  // `measureRequiredFov` checks for frustum containment.
   const { position: camera } = hexDeskCameraPose(layout);
   const monitors = hexMonitorWorldCorners(layout);
-  const blocked = hexQueueSpotWorldPositions(layout).filter((spot) =>
-    monitors.some((quad) => rayBlockedByQuad(camera, spot, quad)));
-  assert.deepEqual(blocked, [], `${blocked.length} queue spot(s) have a monitor in the way`);
+  const eyeLevelSpots = hexQueueSpotWorldPositions(layout).map((spot) => spot.clone().setY(spot.y + FIGURE_EYE_HEIGHT));
+  const blocked = eyeLevelSpots.filter((spot) => monitors.some((quad) => rayBlockedByQuad(camera, spot, quad)));
+  assert.deepEqual(blocked, [], `${blocked.length} queued agent(s) have a monitor in the way`);
 });
 
 test('the hex desk talk spot sits farther from the desk camera than either monitor, so it can never block a sightline to one', () => {
@@ -94,15 +109,18 @@ function deskFrustum(aspect: number): THREE.Frustum {
   );
 }
 
-test('both monitor faces and every queue spot sit inside the hex desk camera\'s own frustum, at every supported aspect ratio', () => {
+test('both monitor faces and every queued agent\'s own eye level sit inside the hex desk camera\'s own frustum, at every supported aspect ratio', () => {
   for (const aspect of DESK_VIEW_ASPECTS) {
     const frustum = deskFrustum(aspect);
     for (const [side, quad] of (['left', 'right'] as const).map((s, i) => [s, hexMonitorWorldCorners(layout)[i]!] as const)) {
       const box = new THREE.Box3().setFromPoints(quad);
       assert.ok(frustum.intersectsBox(box), `the ${side} monitor is outside the frustum at aspect ${aspect.toFixed(3)}`);
     }
-    const outside = hexQueueSpotWorldPositions(layout).filter((spot) => !frustum.containsPoint(spot));
-    assert.deepEqual(outside, [], `${outside.length} queue spot(s) sit outside the frustum at aspect ${aspect.toFixed(3)}`);
+    // Queue spots are floor-level (a figure's own root); the measured FOV guarantees the
+    // visible part of each standing figure (eye height above its spot) clears the frustum.
+    const eyeLevelSpots = hexQueueSpotWorldPositions(layout).map((spot) => spot.clone().setY(spot.y + FIGURE_EYE_HEIGHT));
+    const outside = eyeLevelSpots.filter((spot) => !frustum.containsPoint(spot));
+    assert.deepEqual(outside, [], `${outside.length} queued agent(s) sit outside the frustum at aspect ${aspect.toFixed(3)}`);
   }
 });
 
