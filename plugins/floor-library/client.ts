@@ -30,12 +30,13 @@ import { StickFigure } from '../../src/characters/StickFigure.js';
  * attempted here.
  */
 
-/** The hex Library's own marker (issue #258: `HexRooms.ts`'s `buildHexOffice`), carrying its
- * door-wall frame as plain data (`HexRoomFrame`: `doorMid`, `inward`, `along`) — the hex
- * equivalent of the old rect room's name-and-index lookup. Degrades to nothing without it, the
- * same graceful-degradation rule every other part of this extension already follows (another
- * layout, or a scene that has not built the hex office yet). */
-const LIBRARY_MARKER_NAME = 'hex-library-room';
+/** The active layout's Library room marker (issue #258: `HexRooms.ts`'s `buildHexOffice`;
+ * issue #267: `building-v1/rooms.ts`'s `buildRoom` attaches the same marker for Rooms v1's own
+ * rect library), carrying its door-wall frame as plain data (`doorMid`, `inward`, `along` —
+ * the hex layout's own `HexRoomFrame` shape, which a rect room's `RoomFrame` maps onto just as
+ * well). Degrades to nothing without it, the same graceful-degradation rule every other part
+ * of this extension already follows (a scene that has not built a library room yet). */
+const LIBRARY_MARKER_NAME = 'library-room-marker';
 
 /** The same coarse "is the camera/cursor inside this room" bounds `LabelDetail.ts`'s
  * `DetailSign.rect` already uses for a rect room — a conservative axis-aligned box around the

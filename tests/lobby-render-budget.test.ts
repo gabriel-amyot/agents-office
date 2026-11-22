@@ -37,9 +37,11 @@ function buildFocusedFloorOffice() {
   const scene = new THREE.Scene();
   addLighting(scene);
   // Issue #260 step 7b item 6: this stored legacy room list ('office'/'library'/'lounge'/
-  // 'desks') is swept by `dropLegacyRoomStorage` at construction regardless — kept here only as
-  // the realistic "old stored data a real session might still carry" shape this test's own name
-  // describes, not because anything still reads it.
+  // 'desks') is kept here only as the realistic "old stored data a real session might still
+  // carry" shape this test's own name describes — the hex layout never reads it. Issue #267
+  // review round 1: it also no longer sweeps it away at construction (that key is Rooms v1's
+  // own live storage now, `building-v1/BuildingLayout.ts`), so this fixture's seeded data
+  // stays in `store` untouched; this test still only exercises the hex structure, unaffected.
   const rooms = ['office', 'library', 'lounge', 'desks', 'desks'];
   const store = new Map([['agents-office.building.rooms:agents-office', JSON.stringify(rooms)]]);
   // Issue #260 step 7b item 6: `createOffice` (the rect hall) never ran in production for the

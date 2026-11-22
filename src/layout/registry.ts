@@ -22,15 +22,21 @@ const factories = new Map<string, LayoutFactory>([[
 ]]);
 let defaultLayoutId = 'activity';
 const defaultViews = new Map<string, ViewMode>();
+// Issue #267: the panel header and the switch question show a layout's own chosen name, not
+// its storage id — `building` (Rooms v1's id, kept for the stored-preference migration) would
+// otherwise read as "Building", which is no longer what it means.
+const displayNames = new Map<string, string>([['activity', 'Original']]);
 
 /**
  * Add a layout. An add-on can also make it the default when the user chose none,
- * and name the view it opens in when the URL and the saved view say nothing.
+ * name the view it opens in when the URL and the saved view say nothing, and give it a
+ * display name other than its id, capitalized (the panel header and the switch question).
  */
-export function registerLayout(id: string, factory: LayoutFactory, options: { makeDefault?: boolean; defaultView?: ViewMode } = {}): void {
+export function registerLayout(id: string, factory: LayoutFactory, options: { makeDefault?: boolean; defaultView?: ViewMode; name?: string } = {}): void {
   factories.set(id, factory);
   if (options.makeDefault) defaultLayoutId = id;
   if (options.defaultView) defaultViews.set(id, options.defaultView);
+  if (options.name) displayNames.set(id, options.name);
 }
 
 /** The view a layout opens in by default. First person unless the layout asks for another. */
@@ -40,7 +46,7 @@ export function defaultViewFor(id: string): ViewMode {
 
 /** A readable layout name for the panel header and the switch question. */
 export function layoutName(id: string): string {
-  return id.charAt(0).toUpperCase() + id.slice(1);
+  return displayNames.get(id) ?? id.charAt(0).toUpperCase() + id.slice(1);
 }
 
 type SwitchKey = Pick<KeyboardEvent, 'code' | 'shiftKey' | 'ctrlKey' | 'metaKey' | 'altKey' | 'target'>;

@@ -8,11 +8,13 @@ import { mountHexDebugOverlay } from './building/HexDebugOverlay.js';
 // Issue #161: registers itself (two small monitors on the user's own desk) as a side effect.
 import './building/deskMonitors.js';
 
-// Fork add-on: the growing building with home desks, trips and the user's office.
-// It is the default layout in this fork and opens in the isometric view (#173); `?layout=activity` or Shift+L returns to the original.
+// Fork add-on: the growing hex office, home desks, trips and the user's office.
+// Issue #267: this is the "Experimental" layout now — the stable rect building it replaced
+// (PRs #261/#263/#264) is restored as "Rooms v1" (`addons/building-v1.ts`), which keeps the
+// `building` id and the default slot. This one opens in the isometric view (#173).
 let activeBuilding: BuildingLayout | null = null;
 
-registerLayout('building', (scene, stations) => {
+registerLayout('hex', (scene, stations) => {
   const floor = focusedFloor();
   activeBuilding = new BuildingLayout(scene, stations, {
     storage: typeof window !== 'undefined' ? window.localStorage : undefined,
@@ -30,7 +32,7 @@ registerLayout('building', (scene, stations) => {
   // No-op (builds no geometry at all) without `?hexDebug=1`.
   mountHexDebugOverlay(scene);
   return activeBuilding;
-}, { makeDefault: true, defaultView: 'isometric' });
+}, { defaultView: 'isometric', name: 'Experimental' });
 
 // Rooms from server plugins (mission war rooms) become rooms of the building.
 registerExtension({

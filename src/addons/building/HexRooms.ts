@@ -436,9 +436,11 @@ export function buildHexOffice(counts?: HexWorldCounts): BuiltHexOffice {
   // library room they keyed off, `room-N-library`, was deleted): an invisible, zero-geometry
   // marker, found by name the same way that plugin already finds a rect room, carrying the
   // hex library's own door-wall frame as plain data — no rect assumptions, no `RoomPlanner`
-  // import needed on the plugin's side.
+  // import needed on the plugin's side. Issue #267: Rooms v1's own library room
+  // (`building-v1/rooms.ts`'s `buildRoom`) attaches the identical marker, same name, so the
+  // plugin finds whichever layout's library is actually in the scene.
   const libraryMarker = new THREE.Object3D();
-  libraryMarker.name = 'hex-library-room';
+  libraryMarker.name = 'library-room-marker';
   libraryMarker.userData.libraryFrame = hexRoomFrame(layout.library, layout.library.openEdges[0]);
   // A plain axis-aligned bounding rect of the hexagon, for the same "is the camera/cursor
   // inside this room" checks `LabelDetail.ts`'s `DetailSign.rect` already does for a rect

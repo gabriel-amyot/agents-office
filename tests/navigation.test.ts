@@ -313,7 +313,7 @@ test('issue #161: desk mode never engages pointer lock, from any click; first pe
 
 test('the header text names the layout and the view', () => {
   assert.equal(viewStatusText(registry.layoutName('building'), 'isometric'), 'Building layout · Isometric');
-  assert.equal(viewStatusText(registry.layoutName('activity'), 'first-person'), 'Activity layout · First person');
+  assert.equal(viewStatusText(registry.layoutName('activity'), 'first-person'), 'Original layout · First person');
 });
 
 // --- Layout switch: Shift+L and a confirmation ---

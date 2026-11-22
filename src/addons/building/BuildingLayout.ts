@@ -60,22 +60,14 @@ function isLibrarian(extras: LayoutAgent['extras']): boolean {
   return Array.isArray(extras?.badges) && extras.badges.includes('librarian');
 }
 
-export const BUILDING_STORAGE_KEY = 'agents-office.building.rooms';
-/**
- * Each floor used to keep its own rented room-kind list under its own storage key (issue #118
- * floors design: `BUILDING_STORAGE_KEY` becomes `BUILDING_STORAGE_KEY:<floor>`). Rect rooms
- * are gone (issue #260 steps 2+3: `addRoom`/`saveRooms` deleted), but the key shape is still
- * what `dropLegacyRoomStorage` below sweeps, and what `FloorRegistry.ts`'s
- * `floorRoomsStorageKey` still has to match byte for byte (its own doc comment, and
- * `tests/floor-registry.test.ts`'s cross-check).
- */
-export function floorStorageKey(floor?: string): string {
-  return floor ? `${BUILDING_STORAGE_KEY}:${floor}` : BUILDING_STORAGE_KEY;
-}
 /** A war room's peak desk/debug counts, by room id (issue #129 review round 2): without
  * this, a reload while the room happens to be empty resets its peak to zero in memory,
- * undoing the never-shrinks rule the furniture itself otherwise keeps. */
-export const MISSION_COUNTS_STORAGE_KEY = 'agents-office.building.missionCounts';
+ * undoing the never-shrinks rule the furniture itself otherwise keeps. Issue #267 review
+ * round 1: namespaced under `hex`, never `building` — that prefix is Rooms v1's own live
+ * storage now (`building-v1/BuildingLayout.ts`'s own `MISSION_COUNTS_STORAGE_KEY`), restored
+ * alongside this layout, not dead data this one owns or may sweep.
+ */
+export const MISSION_COUNTS_STORAGE_KEY = 'agents-office.hex.missionCounts';
 const DEFAULT_DWELL_MS = 4000;
 const QUEUE_REFRESH_MS = 500;
 const MISSIONS_BOARD_REFRESH_MS = 1000;
@@ -92,34 +84,16 @@ function slugify(text: string): string {
 
 /**
  * Issue #260 steps 2+3: BuildingLayout no longer rents rect rooms off the hall — `addRoom`,
- * `saveRooms` and the old `migrateLegacyRooms` (which only ever copied this same data forward
- * a floor at a time) are gone, replaced by the hex Hub/Office/Library, which never grow a new
- * rented room. A returning browser may still hold the room-kind lists those deleted functions
- * once saved: the single legacy bare key, plus one `floorStorageKey(floor)` key per floor ever
- * grown. Left behind, they are not just inert — `floorsWithStoredRooms` (`FloorRegistry.ts`)
- * reads that exact key shape to decide whether a floor with no live agent still belongs in the
- * floor-switch menu, so a stale key would list a floor forever on data that no longer means
- * anything. Runs once per browser (its own marker key below), sweeps every key sharing the
- * legacy prefix, and never writes a replacement.
+ * `saveRooms` and the old `migrateLegacyRooms` are gone, replaced by the hex Hub/Office/
+ * Library, which never grow a new rented room. A returning browser may still hold the
+ * room-kind lists those deleted functions once saved, under the legacy bare key and its
+ * per-floor variants (`building-v1/BuildingLayout.ts`'s own `BUILDING_STORAGE_KEY`/
+ * `floorStorageKey`). Issue #267 review round 1: this layout used to sweep that storage once,
+ * on the assumption it was dead data left over from a retired feature — Rooms v1's restore
+ * proved that assumption wrong (it is that layout's own live room-kind list), so the sweep
+ * (`dropLegacyRoomStorage`, `ROOMS_DROPPED_KEY`) is gone. Visiting this layout must never
+ * touch a key Rooms v1 owns.
  */
-export const ROOMS_DROPPED_KEY = 'agents-office.building.rooms.dropped';
-
-export function dropLegacyRoomStorage(storage: BuildingOptions['storage']): void {
-  if (!storage || typeof storage.length !== 'number' || typeof storage.key !== 'function' || typeof storage.removeItem !== 'function') return;
-  try {
-    if (storage.getItem(ROOMS_DROPPED_KEY)) return;
-    const prefix = `${BUILDING_STORAGE_KEY}:`;
-    const keys: string[] = [];
-    for (let index = 0; index < storage.length; index++) {
-      const key = storage.key(index);
-      if (key === BUILDING_STORAGE_KEY || key?.startsWith(prefix)) keys.push(key);
-    }
-    for (const key of keys) storage.removeItem(key);
-    storage.setItem(ROOMS_DROPPED_KEY, '1');
-  } catch {
-    // Storage full or blocked: the dead keys just linger, harmless either way
-  }
-}
 
 type Target = 'home' | 'pod' | 'queue' | `trip:${string}` | `room:${string}`;
 
@@ -141,11 +115,10 @@ interface AgentState {
 export interface BuildingOptions {
   now?: () => number;
   dwellMs?: number;
-  /** `dropLegacyRoomStorage` enumerates every key sharing the legacy rect-rooms prefix, not
-   * just one it already knows the name of — `length`/`key`/`removeItem`, past plain
-   * `getItem`/`setItem`, but optional here: a test's minimal mock storage can skip them, and
-   * `dropLegacyRoomStorage` itself no-ops rather than crash without them. */
-  storage?: Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'length' | 'key' | 'removeItem'>>;
+  /** Only `MISSION_COUNTS_STORAGE_KEY` is read or written through this now (issue #267 review
+   * round 1: the legacy room-kind-list sweep that once needed `length`/`key`/`removeItem` too
+   * is gone — plain `getItem`/`setItem` is all this layout ever touches). */
+  storage?: Pick<Storage, 'getItem' | 'setItem'>;
   /** A real wall clock (epoch ms), for the missions board's elapsed/duration timer. Defaults to `Date.now`. */
   wallClock?: () => number;
   /** The focused floor's name (issue #118): meaningful only to `syncWorldRooms`'s own per-floor repo filter now. Unset shows every floor's war rooms (`ALL_FLOORS`). */
@@ -214,7 +187,6 @@ export class BuildingLayout implements LayoutStrategy {
     this.dwellMs = options.dwellMs ?? DEFAULT_DWELL_MS;
     this.storage = options.storage;
     this.floor = options.floor;
-    dropLegacyRoomStorage(this.storage);
     this.rebuildHexOffice();
     placeMissionsBoard(this.missionsBoard.mesh, this.scene);
     this.missionsBoard.draw([], this.wallClock());

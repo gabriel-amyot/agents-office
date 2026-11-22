@@ -52,8 +52,8 @@ if (returningFromLibrary) {
 
 // Fork add-ons and the browser parts of server plugins register layouts and extensions.
 // Both folders are optional: without them nothing changes. Must run before `chooseLayoutId`
-// below: it is what makes the 'building' layout (registered by `addons/building.ts`) a known
-// choice in the first place.
+// below: it is what makes the 'building' (Rooms v1, `addons/building-v1.ts`) and 'hex'
+// (Experimental, `addons/building.ts`) layouts known choices in the first place.
 import.meta.glob('./addons/*.ts', { eager: true });
 import.meta.glob('../plugins/*/client.ts', { eager: true });
 
@@ -61,19 +61,21 @@ import.meta.glob('../plugins/*/client.ts', { eager: true });
 const layoutId = chooseLayoutId(window.location.search, window.localStorage);
 rememberLayoutId(layoutId, window.localStorage);
 
-// Issue #260 step 7b: the rect hall (floor, walls, desks, bookshelf, meeting tables, and the
-// rest of `createOffice`'s furniture) is the activity layout's own office. The building layout
-// has its own hex-built geometry and stations (`BuildingLayout.rebuildHexOffice`); it never
-// reads a station `createOffice` built, so this only runs for the layout that actually needs it.
-const stations: Map<string, Station> = layoutId === 'activity' ? createOffice(scene) : new Map();
+// Issue #260 step 7b: `createOffice` (the rect hall: floor, walls, desks, bookshelf, meeting
+// tables) is the activity layout's own office. Issue #267: Rooms v1 (the restored rect
+// building, `BuildingLayoutV1.hideHallSideWalls`) still needs that same hall — it replaces
+// `OFFICE_WALLS` with door-gapped ones and reads its stations, the same way it always did
+// before the hex work (PRs #261/#263/#264). Only the hex layout builds its own geometry and
+// stations from nothing and never reads a station `createOffice` built.
+const stations: Map<string, Station> = layoutId === 'hex' ? new Map() : createOffice(scene);
 
-// Floors (issue #118): meaningful only for the building layout (the flat activity layout is
-// one shared office, P8, no floors). The floor to focus: `#floor=` in the URL, the last
+// Floors (issue #118): meaningful only for the two building layouts (the flat activity layout
+// is one shared office, P8, no floors). The floor to focus: `#floor=` in the URL, the last
 // visited floor, else `ALL_FLOORS` (review: a fresh page load has not polled any agent yet,
 // so there is nothing to pick a "busiest floor" default from before the first poll answers;
 // showing everything, same as today, is the only safe default at that point — the
 // floor-switch menu lets the user narrow to one floor once agents are known).
-const chosenFloor = layoutId === 'building' ? (() => {
+const chosenFloor = layoutId !== 'activity' ? (() => {
   const floor = defaultFloor(window.localStorage, window.location.hash);
   setFocusedFloor(floor);
   rememberFloor(floor, window.localStorage);

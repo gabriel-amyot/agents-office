@@ -24,7 +24,7 @@ after(() => {
   Reflect.deleteProperty(globalThis, 'document');
 });
 
-const LIBRARY_MARKER_NAME = 'hex-library-room';
+const LIBRARY_MARKER_NAME = 'library-room-marker';
 
 /** Issue #258: the hex Library's own marker (`HexRooms.ts`'s `buildHexOffice`) replaces the
  * old rect `room-N-library` lookup. A hex frame's `doorMid` already IS the door (no rect
@@ -68,7 +68,7 @@ function shelfSigns(scene: THREE.Scene): THREE.Object3D[] {
 
 test('without the library room in the scene, no shelf mounts (another layout, or not grown yet)', () => {
   setFocusedFloor('pm-floor');
-  const scene = new THREE.Scene(); // no hex-library-room marker
+  const scene = new THREE.Scene(); // no library-room-marker
   const extension = new FloorLibraryOfficeExtension();
   extension.start(scene);
   extension.worldChanged(world([library('pm-floor', [{ name: 'vendors', entries: [{ title: 'Placer.ai' }] }])]));
@@ -338,7 +338,7 @@ test('issue #253 review, ported to hex (issue #258): the librarian NPC stands ne
 
 test('the librarian NPC never mounts without the library room (graceful degradation), and unmounts if the library disappears', () => {
   setFocusedFloor('pm-floor');
-  const scene = new THREE.Scene(); // no hex-library-room marker
+  const scene = new THREE.Scene(); // no library-room-marker
   const extension = new FloorLibraryOfficeExtension();
   extension.start(scene);
   extension.worldChanged(world([library('pm-floor', [{ name: 'vendors', entries: [{ title: 'Placer.ai' }] }], 'pm-lib')]));
