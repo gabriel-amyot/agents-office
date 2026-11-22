@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { canvasBoard } from './missionRooms.js';
+import type { HexRoomGeometry } from './HexRoomPlanner.js';
 
 /**
  * The missions board (issue #144): one small wall board near the mission
@@ -7,6 +8,13 @@ import { canvasBoard } from './missionRooms.js';
  * only, no interaction. Reuses the same canvas-board factory the war rooms'
  * own statement/docs/issues/kanban boards use, so it costs the same one
  * (unmergeable, but already-accounted-for) draw call as any of those.
+ *
+ * Issue #269 fix: `placeMissionsBoard` used to hang this on the rect building's own hall wall
+ * (`mesh.position.set(-5, 1.7, -12.94)`, a hand-measured spot on a wall issue #260 deleted).
+ * In the hex layout that coordinate is just empty air between the Hub and its neighbors —
+ * exactly the "floating white board in the void" Gabriel flagged live. It now mounts on the
+ * Hub's own wall, the same corner-interpolation `HexRooms.ts`'s elevator/kitchen placeholders
+ * already use, at a third open-ish direction (`+4`) so it does not overlap either.
  */
 
 export interface MissionBoardEntry {
@@ -53,8 +61,31 @@ export function createMissionsBoard(): { mesh: THREE.Mesh; draw: (missions: Miss
   };
 }
 
-/** Mounted on the hall's own north wall, between the two mission-wing doors, facing into the hall. */
-export function placeMissionsBoard(mesh: THREE.Mesh, scene: THREE.Scene): void {
-  mesh.position.set(-5, 1.7, -12.94);
+/**
+ * Mounted on the hall's own north wall, between the two mission-wing doors, facing into the
+ * hall — `building-v1` (Rooms v1)'s own rect layout, unchanged, when called with no `hub`.
+ *
+ * The hex layout (`building/BuildingLayout.ts`) passes its Hub's own geometry instead: that
+ * hardcoded rect coordinate is empty air once the hex structure replaces the hall (issue #260
+ * deleted it), and this board rendered there as a floating white plate with no wall in sight —
+ * exactly the artifact Gabriel flagged live. With `hub` given, it mounts on the Hub's own wall
+ * instead, near its back (the elevator sits at `+3`, the kitchen at `+2` off the Hub's first
+ * stair; `+4` keeps this board clear of both), facing the Hub center.
+ */
+export function placeMissionsBoard(mesh: THREE.Mesh, scene: THREE.Scene, hub?: HexRoomGeometry): void {
+  const BOARD_HEIGHT = 1.7;
+  if (!hub) {
+    mesh.position.set(-5, BOARD_HEIGHT, -12.94);
+    scene.add(mesh);
+    return;
+  }
+  const wallward = hub.corners[(hub.openEdges[0] + 4) % 6]!;
+  const TOWARD_WALL = 0.85;
+  mesh.position.set(
+    hub.center.x + (wallward.x - hub.center.x) * TOWARD_WALL,
+    BOARD_HEIGHT,
+    hub.center.z + (wallward.z - hub.center.z) * TOWARD_WALL,
+  );
+  mesh.lookAt(hub.center.x, BOARD_HEIGHT, hub.center.z);
   scene.add(mesh);
 }

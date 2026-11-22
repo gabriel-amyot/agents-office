@@ -91,6 +91,53 @@ function orientedBox(from: THREE.Vector3, to: THREE.Vector3, crossA: number, cro
   return mesh;
 }
 
+/** A canvas texture shared by every hex floor: the floor's own flat color, with a small
+ * six-point star/rosette inlay drawn once at the center (Gabriel's round 3 ask — "stars drawn
+ * on the ground"). One texture, one material, cached by color: every room's floor fan maps its
+ * own hexagon onto this same unit square (`buildHexFloor`'s own UVs below), so every tile gets
+ * its own star at zero extra draw calls — the star lives in the shared `hex-floors` material,
+ * not a separate mesh. */
+const floorMaterialCache = new Map<number, THREE.MeshToonMaterial>();
+function getFloorMaterial(color: number): THREE.MeshToonMaterial {
+  const cached = floorMaterialCache.get(color);
+  if (cached) return cached;
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const base = new THREE.Color(color);
+  ctx.fillStyle = `#${base.getHexString()}`;
+  ctx.fillRect(0, 0, size, size);
+  const cx = size / 2;
+  const cy = size / 2;
+  const outer = size * 0.3;
+  const inner = outer * 0.42;
+  const inlay = base.clone().offsetHSL(0, 0, 0.08);
+  ctx.strokeStyle = `#${inlay.getHexString()}`;
+  ctx.fillStyle = `#${inlay.getHexString()}`;
+  ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  for (let i = 0; i < 12; i++) {
+    const angle = (Math.PI / 6) * i - Math.PI / 2;
+    const radius = i % 2 === 0 ? outer : inner;
+    const x = cx + radius * Math.cos(angle);
+    const y = cy + radius * Math.sin(angle);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.MeshToonMaterial({ map: texture, gradientMap: getToonMaterial(color).gradientMap });
+  floorMaterialCache.set(color, material);
+  return material;
+}
+
 /** A hex room's floor: a flat polygon fan from its center. Tagged `userData.floor` (issue
  * #260, step 7a part c): that tag feeds `overviewBounds`'s `floorBounds`, which unions every
  * floor's world bounds into the isometric camera's default pan/zoom limits. Step 2 deliberately
@@ -103,6 +150,7 @@ function orientedBox(from: THREE.Vector3, to: THREE.Vector3, crossA: number, cro
  * proves the margin still holds. */
 function buildHexFloor(room: HexRoomGeometry, color: number): THREE.Mesh {
   const positions: number[] = [];
+  const uvs: number[] = [];
   for (let i = 0; i < 6; i++) {
     const a = room.corners[i];
     const b = room.corners[(i + 1) % 6];
@@ -112,11 +160,20 @@ function buildHexFloor(room: HexRoomGeometry, color: number): THREE.Mesh {
     // downward view or raycast. Swapping a/b flips the winding to counter-clockwise from
     // above, normal up, matching every rect room's floor.
     positions.push(room.center.x, 0, room.center.z, b.x, 0, b.z, a.x, 0, a.z);
+    // Each corner maps onto the shared floor texture's own unit circle, centered on the room's
+    // own center — every tile's star lands dead center on its own floor, regardless of the
+    // room's world position (`getFloorMaterial`'s own doc comment).
+    const toUv = (p: HexPoint): [number, number] => [0.5 + (p.x - room.center.x) / (2 * room.radius), 0.5 + (p.z - room.center.z) / (2 * room.radius)];
+    const [cu, cv] = [0.5, 0.5];
+    const [bu, bv] = toUv(b);
+    const [au, av] = toUv(a);
+    uvs.push(cu, cv, bu, bv, au, av);
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geometry.computeVertexNormals();
-  const mesh = new THREE.Mesh(geometry, getToonMaterial(color));
+  const mesh = new THREE.Mesh(geometry, getFloorMaterial(color));
   mesh.name = 'hex-floor';
   mesh.receiveShadow = true;
   mesh.userData.floor = true;

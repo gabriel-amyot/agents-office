@@ -188,7 +188,7 @@ export class BuildingLayout implements LayoutStrategy {
     this.storage = options.storage;
     this.floor = options.floor;
     this.rebuildHexOffice();
-    placeMissionsBoard(this.missionsBoard.mesh, this.scene);
+    placeMissionsBoard(this.missionsBoard.mesh, this.scene, this.hexOffice.layout.hub);
     this.missionsBoard.draw([], this.wallClock());
   }
 
@@ -237,8 +237,26 @@ export class BuildingLayout implements LayoutStrategy {
       minZ: Math.min(...hubCorners.map((c) => c.z)),
       maxZ: Math.max(...hubCorners.map((c) => c.z)),
     };
-    const hubCenter = this.hexOffice.layout.hub.center;
-    if (!this.hexHubLabel) this.hexHubLabel = roomLabel('Hub', new THREE.Vector3(hubCenter.x, 0, hubCenter.z), hubRect);
+    const hub = this.hexOffice.layout.hub;
+    const hubCenter = hub.center;
+    // Issue #269 fix: the "HUB" plate used to sit at the room's dead center, the same spot
+    // the elevator (`HexRooms.ts`'s `buildElevator`, opposite the stair at `openEdges[0] + 3`)
+    // crowds with the open-office desk clusters either side of it. A plain center point reads
+    // fine empty, but with agents at every hub desk and their own signs stacked above them, the
+    // elevator's own tall silhouette sits right under the plate. Shifting the label a third of
+    // the way toward the stair (the walkway opening, `openEdges[0]`'s own edge, the one side of
+    // the room furniture never claims) keeps it over clear floor, away from the elevator.
+    const stairEdgeIndex = hub.openEdges[0]!;
+    const stairA = hub.corners[stairEdgeIndex]!;
+    const stairB = hub.corners[(stairEdgeIndex + 1) % 6]!;
+    const stairMid = { x: (stairA.x + stairB.x) / 2, z: (stairA.z + stairB.z) / 2 };
+    const HUB_LABEL_TOWARD_STAIR = 1 / 3;
+    const hubLabelPosition = new THREE.Vector3(
+      hubCenter.x + (stairMid.x - hubCenter.x) * HUB_LABEL_TOWARD_STAIR,
+      0,
+      hubCenter.z + (stairMid.z - hubCenter.z) * HUB_LABEL_TOWARD_STAIR,
+    );
+    if (!this.hexHubLabel) this.hexHubLabel = roomLabel('Hub', hubLabelPosition, hubRect);
     this.hexOffice.group.add(this.hexHubLabel);
     roomLabelBatchFor(this.scene).track(this.hexHubLabel);
   }

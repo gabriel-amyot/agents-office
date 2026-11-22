@@ -73,9 +73,13 @@ export function isComponentRole(role: RoomRole): role is ComponentRole {
  * geometry with no Three.js import chain). Hex rooms have no ceiling (round 7 decision), so
  * this is their only height. */
 export const HEX_WALL_HEIGHT = OFFICE.height;
-/** The walkway deck's height above the floor: wall height plus a small clearance, so it sits
- * visibly above the open-topped rooms. */
-export const WALKWAY_HEIGHT = HEX_WALL_HEIGHT + 0.6;
+/** The walkway deck's height above the floor (round 3 feedback: "a little wire mesh bridge"
+ * at floor level, not a structure you climb to roof height to cross). Originally
+ * `HEX_WALL_HEIGHT + 0.6` — tall enough that the two "ramps" either side of the deck were
+ * nearly vertical over `RAMP_LENGTH`'s short run, rendering as the tall gray slabs standing
+ * through every room that Gabriel flagged live. `BRIDGE_GAP` (2) is small enough now that the
+ * deck only needs to clear the floor, not the walls: a thin threshold plate, not a stair. */
+export const WALKWAY_HEIGHT = 0.12;
 /** "A little bridge... very small": the deck and every ramp share this width. */
 export const WALKWAY_WIDTH = 1.6;
 export const HEX_WALL_THICKNESS = 0.2;
@@ -84,7 +88,8 @@ export const HEX_WALL_THICKNESS = 0.2;
  * the visual detail to refine once the walking flow itself is proven). Issue #261 review round
  * 2: re-derived alongside the uniform `ROOM_RADIUS` and `BRIDGE_GAP` — every room-to-room gap
  * on the lattice is the same `BRIDGE_GAP` (2) now, so `2 * RAMP_LENGTH` must stay within it
- * without the two ramps crossing past the gap's own midpoint. */
+ * without the two ramps crossing past the gap's own midpoint. Now that `WALKWAY_HEIGHT` sits
+ * at floor level, this run is almost flat — a short, gentle lip rather than a stair. */
 export const RAMP_LENGTH = BRIDGE_GAP / 2 - 0.1;
 
 function add(a: HexPoint, b: HexPoint): HexPoint {
